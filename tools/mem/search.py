@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+#
+# 过程类事实（category = 过程）默认不进自动注入：它记录的是当时的动作与试探，
+# 最容易过期，混进「现在是什么」里会误导。仍然保留在库里，mem_search 可以主动捞到。
+PROCESS_CATS = {"过程"}
 """search —— 混合检索：全文 + 向量 + 图谱，RRF 融合
 
 对齐 Basic Memory 的四路召回思路（语义/关键词/图谱/时间），
@@ -326,6 +330,8 @@ def context(q, top=3, budget=1600, since=None, until=None, gate=False, margin=1.
             bucket[p] = {"title": h["title"], "obs": []}
             order.append(p)
         if h["kind"] == "obs":
+            if (h.get("cat") or "") in PROCESS_CATS:
+                continue
             bucket[p]["obs"].append((h["cat"], h["text"]))
     out = []
     if order:
@@ -336,17 +342,47 @@ def context(q, top=3, budget=1600, since=None, until=None, gate=False, margin=1.
                     continue
                 rows = db.execute(
                     """SELECT o.category, o.text FROM obs o JOIN notes n ON n.id=o.note_id
-                       WHERE n.path=? ORDER BY o.line LIMIT 3""", (p,)).fetchall()
+                       WHERE n.path=? AND COALESCE(o.category,'') NOT IN ({}) ORDER BY o.line LIMIT 3""".format(",".join("?" * len(PROCESS_CATS))), (p, *PROCESS_CATS)).fetchall()
                 bucket[p]["obs"] = rows
         finally:
             db.close()
+    # 核验标记：✅ 引用已核验 / 🔗 无可核验引用。MEM_VERIFY=0 可关掉。
+    import os as _os
+    verify_on = _os.environ.get("MEM_VERIFY", "1") != "0"
+    V = None
+    if verify_on:
+        try:
+            import verify as V  # noqa: F401
+        except Exception:
+            V = None
+
+    ok_n = tot_n = 0
     for p in order:
         n = bucket[p]
-        block = f"## {n['title']}\n  ({p})\n"
+        rows = []
         for cat, text in n["obs"][:4]:
-            block += f"  - [{cat}] {text}\n"
+            mark = ""
+            if V is not None:
+                try:
+                    mark = V.mark(text)
+                except Exception:
+                    mark = ""
+            rows.append((mark, cat, text))
+        block = f"## {n['title']}\n  ({p})\n"
+        for mark, cat, text in rows:
+            block += f"  - {mark}[{cat}] {text}\n" if mark else f"  - [{cat}] {text}\n"
         if used + len(block) > budget:
             break
         out.append(block.rstrip())
         used += len(block)
-    return "\n\n".join(out)
+        for mark, _cat, _text in rows:
+            tot_n += 1
+            if mark == "✅":
+                ok_n += 1
+
+    body = "\n\n".join(out)
+    if body and tot_n:
+        head = (f"（{tot_n} 条：{ok_n} 条引用已于核验时点确认仍在 ✅；"
+                f"{tot_n - ok_n} 条无可核验引用 🔗）")
+        return head + "\n\n" + body
+    return body

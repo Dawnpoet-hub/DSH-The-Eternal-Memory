@@ -13,6 +13,8 @@
   python3 tools/mem/mem.py recent               最近修改
   python3 tools/mem/mem.py list                 列出全部笔记（供面板用）
   python3 tools/mem/mem.py doctor               体检：格式、失效引用、未整理
+  python3 tools/mem/mem.py audit                质量与成本指标（同义率/召回重复/注入/提炼）
+  python3 tools/mem/mem.py dedupe               合并提案报告（只读，不改库）
   python3 tools/mem/mem.py stats                统计
   python3 tools/mem/mem.py watch                轮询监听变化（Ctrl-C 退出）
   python3 tools/mem/mem.py mcp                  以 MCP 服务方式启动
@@ -30,6 +32,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import core  # noqa: E402
 import search as S  # noqa: E402
+import audit as A  # noqa: E402
+import dedupe as D  # noqa: E402
 
 
 def _ts(v):
@@ -320,6 +324,56 @@ def cmd_edges(a):
     print(f"实体 {ent} 个")
 
 
+def cmd_audit(a):
+    since = A.parse_since(a.since) if a.since else None
+    r = A.collect(recall_samples=a.recall_samples, since_ms=since)
+    saved = None
+    if a.save:
+        d = core.WS / ".mem" / "audit"
+        d.mkdir(parents=True, exist_ok=True)
+        p = d / f"audit-{r['ts']}.json"
+        p.write_text(jsonlib.dumps(r, ensure_ascii=False, indent=1), encoding="utf-8")
+        saved = str(p)
+    if a.json:
+        print(jsonlib.dumps(r, ensure_ascii=False))
+        return
+    print(A.render(r))
+    if saved:
+        print(f"  基线已存：{saved}")
+
+
+def cmd_dedupe(a):
+    if a.manual:
+        lines = [x for x in (a.merge or "").replace(" ", "").split(",") if x]
+        r = D.manual_merge(a.manual, a.keep, lines, new_text=a.text, verbose=not a.json)
+        print(jsonlib.dumps(r, ensure_ascii=False) if a.json
+              else f"人工合并完成：{r['path']} 合并 {r['merged']} 条到第 {r['keep_line']} 行"
+                   + ("（已富化保留条）" if r["enriched"] else "")
+                   + f"\n  备份：{r['backup']}")
+        return
+    if a.apply:
+        stats = D.apply(include_review=a.include_review, verbose=not a.json)
+        if a.json:
+            print(jsonlib.dumps(stats, ensure_ascii=False))
+        else:
+            print(D.render_apply(stats))
+        return
+    r = D.collect()
+    out_path = a.out
+    if not out_path:
+        d = core.WS / ".mem" / "audit"
+        d.mkdir(parents=True, exist_ok=True)
+        out_path = str(d / f"dedupe-{r['ts']}.md")
+    md = D.render_markdown(r)
+    with open(out_path, "w", encoding="utf-8") as fh:
+        fh.write(md)
+    if a.json:
+        print(jsonlib.dumps(r, ensure_ascii=False))
+        return
+    print(D.render_text(r))
+    print(f"  完整报告：{out_path}")
+
+
 def cmd_stats(a):
     db = core.connect()
     proj = getattr(a, "project", None)
@@ -456,6 +510,27 @@ def main():
     p = sub.add_parser("doctor", help="体检")
     p.add_argument("--json", action="store_true")
     p.set_defaults(fn=cmd_doctor)
+
+    p = sub.add_parser("audit", help="质量与成本指标（改前改后对比）")
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--save", action="store_true", help="另存基线到 .mem/audit/")
+    p.add_argument("--recall-samples", type=int, default=0,
+                   help="重放多少次历史提问来算召回重复率（默认 0，不跑）")
+    p.add_argument("--since", help="只看这段之后的日志：90m / 2h / 3d / 2026-11-17 18:00")
+    p.set_defaults(fn=cmd_audit)
+
+    p = sub.add_parser("dedupe", help="合并提案报告（只读，不改库）")
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--out", help="Markdown 输出路径（默认 .mem/audit/dedupe-<ts>.md）")
+    p.add_argument("--apply", action="store_true",
+                   help="真正执行合并（默认只出报告）；会先备份再改文件")
+    p.add_argument("--include-review", action="store_true", dest="include_review",
+                   help="连“会丢字面值”的 B 组一起合并（危险，需人工判断过）")
+    p.add_argument("--manual", metavar="FILE", help="人工指定合并的笔记文件（相对工作区路径）")
+    p.add_argument("--keep", type=int, help="保留哪一行（文件原始行号，1-based）")
+    p.add_argument("--merge", help="要标成已合并的行号，逗号分隔，例如 18,31,36,42")
+    p.add_argument("--text", help="改写保留行的正文（用于把独有信息补进去）")
+    p.set_defaults(fn=cmd_dedupe)
 
     p = sub.add_parser("stats", help="统计")
     p.add_argument("--json", action="store_true")

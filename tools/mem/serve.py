@@ -54,12 +54,18 @@ def main():
                          "root": str(root.relative_to(core.WS)) if root else "memory"})
                 continue
 
+            if op == "dupcheck":
+                # L1 写入闸门：批量判定待写入事实是否已存在（见 gate.py）
+                import gate as G
+                respond({"results": G.check(req.get("items") or [])})
+                continue
             q = (req.get("q") or "").strip()
             if not q:
                 respond({"text": ""})
                 continue
             if op == "search":
-                respond({"hits": S.search(q, int(req.get("n", 8)))})
+                respond({"hits": S.search(q, int(req.get("n", 8)),
+                                          project=req.get("project") or None)})
                 continue
             text = S.context(q, top=int(req.get("top", 3)), budget=int(req.get("budget", 900)),
                              gate=True, project=req.get("project") or None)

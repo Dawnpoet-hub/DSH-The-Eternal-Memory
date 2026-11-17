@@ -189,6 +189,10 @@ def parse_note(path, project):
                 cm = CTX_RE.search(rest)
                 if cm:
                     ctx, rest = cm.group(1).strip(), rest[: cm.start()].strip()
+            # 已被合并的条目（dedupe --apply 打过标记）：原文留在文件里，但不进索引、
+            # 不参与检索，避免重复条目继续挤占召回预算。
+            if "merged_into:" in ctx:
+                continue
             tags = TAG_RE.findall(rest)
             text_only = TAG_RE.sub("", rest).strip()
             obs.append({"category": cat, "text": text_only,
