@@ -159,6 +159,9 @@ window.__ModuleLoader__.load({
         scopeAll: '全部工作区',
         scopeHint: '限定只在这个工作区里搜',
 
+        pagesUnit: '页面',
+        charsUnit: '字',
+
       },
       en: {
         panel: 'Long-term memory',
@@ -301,6 +304,9 @@ window.__ModuleLoader__.load({
       },
         scopeAll: 'All workspaces',
         scopeHint: 'Limit the search to one workspace',
+
+        pagesUnit: 'page',
+        charsUnit: 'chars',
 
     }
 
@@ -1653,6 +1659,13 @@ window.__ModuleLoader__.load({
                    title: `${r.from}  ${TYPE_LABEL[r.type] ?? r.type} →  ${target}`,
                    meta: r.toPath ? t('openTarget') : t('missingTarget'),
                    open: r.toPath ? { path: r.toPath, title: target } : null }
+        }
+        if (view.name === 'pages') {
+          // 页面是成段文字，没有「条要点」这个概念，改成字数
+          const chars = r.chars ?? r.obs ?? 0
+          return { key: r.path, title: r.title,
+                   meta: `${r.project ?? ''} · ${t('pagesUnit')} · ${chars ? `${chars} ${t('charsUnit')} · ` : ''}${fmtDays(r.mtime, t)}`,
+                   open: { path: r.path, title: r.title } }
         }
         return { key: r.path, title: r.title,
                  meta: `${r.project ?? ''} · ${r.type} · ${r.obs} ${t('pointsUnit')} · ${fmtDays(r.mtime, t)}`,
