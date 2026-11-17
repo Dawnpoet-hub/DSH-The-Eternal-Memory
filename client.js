@@ -1031,7 +1031,13 @@ window.__ModuleLoader__.load({
               err ? `${t('modelLoadFail')}：${err}` : t('modelLoading'))))
       }
 
-      const progressButton = (pct, bytes, stalled) => h('div', {
+      const fmtSpeed = (bps) => {
+        if (!bps || bps < 1024) return '0 KB/s'
+        if (bps < 1048576) return `${Math.round(bps / 1024)} KB/s`
+        return `${(bps / 1048576).toFixed(1)} MB/s`
+      }
+
+      const progressButton = (pct, bytes, stalled, speed) => h('div', {
         style: {
           position: 'relative', overflow: 'hidden', width: 104, boxSizing: 'border-box', textAlign: 'center',
           border: '1px solid color-mix(in srgb, currentColor 20%, transparent)',
@@ -1049,8 +1055,7 @@ window.__ModuleLoader__.load({
           pct <= 0 ? t('modelPreparing')
             : (stalled && stalled > 30)
               ? `${((bytes || 0) / 1048576).toFixed(0)}MB · ${t('modelStalled', { n: stalled })}`
-              : pct < 3 ? `${Math.max(1, Math.round(pct))}% · ${((bytes || 0) / 1048576).toFixed(0)}MB`
-                : `${Math.round(pct)}%`))
+              : `${Math.round(pct)}% · ${fmtSpeed(speed)}`))
 
       const embedRows = (m.embed?.options ?? []).map((o) => {
         const dl = m.downloads?.[o.id]
@@ -1074,7 +1079,7 @@ window.__ModuleLoader__.load({
                   title: dl.tail || '',
                   onClick: () => post({ action: 'download', kind: 'embed', model: o.id }),
                 }, t('modelFailed'))
-              : progressButton(dl.progress, dl.bytes, dl.stalledSec))
+              : progressButton(dl.progress, dl.bytes, dl.stalledSec, dl.speed))
             : h('button', {
                 style: { ...S.btn, fontSize: 11.5, width: 104, boxSizing: 'border-box', justifyContent: 'center' },
                 onClick: () => post({ action: 'download', kind: 'embed', model: o.id }),
@@ -1105,7 +1110,7 @@ window.__ModuleLoader__.load({
                 title: rerankDl.tail || '',
                 onClick: () => post({ action: 'download', kind: 'rerank', model: rerank.current }),
               }, t('modelFailed'))
-            : progressButton(rerankDl.progress, rerankDl.bytes, rerankDl.stalledSec))
+            : progressButton(rerankDl.progress, rerankDl.bytes, rerankDl.stalledSec, rerankDl.speed))
           : h('button', {
               style: { ...S.btnPrimary, fontSize: 11.5, width: 104, boxSizing: 'border-box', justifyContent: 'center' },
               onClick: () => post({ action: 'download', kind: 'rerank', model: rerank.current }),

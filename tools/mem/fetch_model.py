@@ -70,6 +70,7 @@ def main() -> int:
 
     stop = threading.Event()
     last = {"bytes": 0, "at": time.time()}
+    samples = []   # [(time, bytes)] 用来算瞬时速度
 
     def pump() -> None:
         while not stop.is_set():
@@ -79,7 +80,18 @@ def main() -> int:
                 last["bytes"] = done
                 last["at"] = now
             stalled = int(now - last["at"])
-            write(out_path, {"done": done, "total": total, "state": "running", "stalled": stalled})
+            samples.append((now, done))
+            while samples and now - samples[0][0] > 5:
+                samples.pop(0)
+            speed = 0
+            if len(samples) >= 2:
+                dt = samples[-1][0] - samples[0][0]
+                if dt > 0:
+                    speed = max(0, int((samples[-1][1] - samples[0][1]) / dt))
+            write(out_path, {
+                "done": done, "total": total, "state": "running",
+                "stalled": stalled, "speed": speed,
+            })
             stop.wait(0.5)
 
     thread = threading.Thread(target=pump, daemon=True)

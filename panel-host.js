@@ -665,6 +665,7 @@ function downloadProgress() {
         if (p.state === 'done') { state = 'done'; bytes = total || bytes }
         if (p.state === 'error') { state = 'error'; error = p.error || error }
         if (typeof p.stalled === 'number') info.pythonStalled = p.stalled
+        if (typeof p.speed === 'number') info.speed = p.speed
       }
     } catch { /* ignore */ }
     // 停滞检测：记录上次字节变化时间
@@ -675,7 +676,7 @@ function downloadProgress() {
     const expected = total || Math.round((info.expectedGB ?? 0.6) * 1024 ** 3)
     // 保留一位小数，避免低速下载时长时间停在「1%」
     const progress = total > 0 && bytes > 0 ? Math.min(99, Math.round((bytes / total) * 1000) / 10) : 0
-    out[model] = { progress, bytes, expected, status: state, error, stalledSec }
+    out[model] = { progress, bytes, expected, status: state, error, stalledSec, speed: info.speed ?? 0 }
   }
   return out
 }
