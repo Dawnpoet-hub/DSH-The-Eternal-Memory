@@ -174,6 +174,9 @@ window.__ModuleLoader__.load({
         modelPreparing: '准备中…',
         modelFailed: '下载失败，点一下重试',
 
+        modelLoading: '正在读取模型信息…',
+        modelLoadFail: '读取模型信息失败',
+
       },
       en: {
         panel: 'Long-term memory',
@@ -332,6 +335,9 @@ window.__ModuleLoader__.load({
         modelSwitching: 'Switching and rebuilding the index, hold on',
         modelPreparing: 'Preparing…',
         modelFailed: 'Download failed — tap to retry',
+
+        modelLoading: 'Loading model info…',
+        modelLoadFail: 'Could not load model info',
 
     }
 
@@ -1038,8 +1044,9 @@ window.__ModuleLoader__.load({
       const [msg, setMsg] = useState(null)
       const [open, setOpen] = useState(false)
 
+      const [err, setErr] = useState(null)
       const load = async () => {
-        try { setM(await getJson('/models')) } catch { /* ignore */ }
+        try { setM(await getJson('/models')); setErr(null) } catch (e) { setErr(String(e.message || e)) }
       }
       // 弹窗打开期间 2 秒刷新一次：下载进度要能肉眼看到在动
       useEffect(() => {
