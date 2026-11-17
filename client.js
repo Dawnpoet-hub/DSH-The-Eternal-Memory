@@ -1947,6 +1947,10 @@ window.__ModuleLoader__.load({
         let boundT = null
         try {
           for (const [locale, dict] of Object.entries(DICTS)) {
+            if (!dict || typeof dict !== 'object' || Array.isArray(dict)) {
+              report('locale_skip', locale)
+              continue
+            }
             ctx.effect(() => ctx.locale.register(NS, locale, dict), `mem-panel:${locale}`)
           }
           boundT = ctx.locale.bind(NS)

@@ -13,7 +13,8 @@ const run = promisify(execFile)
 
 const BACKUPS = path.join(STATE_DIR, 'backups')
 const API = '/mem-panel/api'
-const CLIENT_VERSION = '3.9.2'
+let CLIENT_VERSION = 'dev'
+try { CLIENT_VERSION = JSON.parse(readFileSync(path.join(BUNDLE_DIR, 'package.json'), 'utf8')).version } catch { /* ignore */ }
 const TOKEN = 'mem-panel-local-v1'
 const MAX_BODY = 20 * 1024 * 1024
 
