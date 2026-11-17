@@ -25,6 +25,15 @@ const DEBOUNCE_MS = Number(process.env.MEM_AUTO_IDLE_MS ?? 60_000)  // 停手多
 const CONTEXT_TURNS = Number(process.env.MEM_AUTO_CONTEXT ?? 10)     // 每次附带的上下文轮数
 const MIN_NEW_TURNS = Number(process.env.MEM_AUTO_MIN_TURNS ?? 8)    // 攒够多少新轮次就提炼
 const FALLBACK_TURNS = 20                                            // 锚点失效时整段重发的轮数
+// L0：context 只作为「上一轮停顿点」的短背景送进 system，不参与事实抽取。
+// 实测（见 docs）：context 占送入轮次的 44%，会被反复提炼成同一事实的不同措辞。
+// 设 MEM_AUTO_CTX_EXTRACT=1 可回退到旧行为（context 一并作为可抽取素材）。
+const EXTRACT_CONTEXT = process.env.MEM_AUTO_CTX_EXTRACT === '1'
+const PRELUDE_CHARS = 200        // 停顿点摘要的字数上限
+// L1 写入闸门：写库前先问常驻服务「这条是不是已经有了」（判据见 tools/mem/gate.py）。
+// 设 MEM_AUTO_DEDUPE=0 可关掉，退化成只做字面包含去重。
+const DEDUPE_GATE = process.env.MEM_AUTO_DEDUPE !== '0'
+const GATE_TIMEOUT_MS = Number(process.env.MEM_AUTO_GATE_TIMEOUT ?? 8000)
 const CHUNK_CHARS = 12_000       // 与 Hindsight 的 retain_chunk_size 一致
 const MAX_CHUNKS = 3
 const MAX_ITEMS = 8
@@ -259,6 +268,22 @@ function renderJsonl(sessionId, turns) {
   return lines.join('\n')
 }
 
+/**
+ * 从 context 轮次里抽一句「上一轮停顿点」。
+ * 目的只是让模型知道「改成这样」指的是什么，不给它可抽取的素材。
+ * 优先取最后一条 assistant，没有就取最后一条任何消息。
+ */
+function preludeFrom(context) {
+  if (!Array.isArray(context) || context.length === 0) return ''
+  const rev = [...context].reverse()
+  const last = rev.find((t) => t && t.role === 'assistant' && t.content)
+    || rev.find((t) => t && t.content)
+  if (!last) return ''
+  const text = String(last.content).replace(/\s+/g, ' ').trim()
+  if (!text) return ''
+  return text.length > PRELUDE_CHARS ? `${text.slice(0, PRELUDE_CHARS)}…` : text
+}
+
 function chunkJsonl(jsonl, size = CHUNK_CHARS, maxChunks = MAX_CHUNKS) {
   if (jsonl.length <= size) return [jsonl]
   const chunks = []
@@ -311,6 +336,7 @@ const EXTRACT_PROMPT = `你在把一段开发者对话（JSONL，每行一个 {r
 - 遇到的问题与解决方式
 - 确立的约定或不变量
 - 被否决的方案：最多一条，写成「最初用 X，后来改成 Y，因为 Z」
+- 排查过程与验证手法：试探、二分定位、状态检查、临时改动、等待验证的结果 —— 用 category「过程」
 
 必须遵守：
 1. 对话会自我修订。**只把最终生效的结论记为决定**；被推翻的旧方案只能出现在上面那条「被否决」的事实里，绝不单独成为一条「决定」。同一个设置改过多次，只保留最后一次，并说清哪个胜出。
@@ -318,9 +344,16 @@ const EXTRACT_PROMPT = `你在把一段开发者对话（JSONL，每行一个 {r
 3. 不要为每条消息、每个中间方案、每个 action 各写一条。短对话通常 1–2 条，长对话也很少超过 6 条。
 4. 不要编造。只写对话里真正定下来的东西。
 5. 每一条都必须原样保留开头的 REF-ID 标记。
+6. **分清「过程」和「结果」，两者都要记，但绝不能混**：
+   - **结果**＝最终生效的规则、取值、文件改动、约定。category 用 决定 / 约束 / 环境 / 原因 / 事实。
+   - **过程**＝当时的状态检查、试探、二分定位、临时改动、验证手法、等待某结果。**category 必须用「过程」**，
+     严禁写成「决定」或「事实」。
+   - 判据一句话：**这句话描述的东西，下个月还在不在？** 不在 → 过程；在 → 结果。
+   - 过程里如果夹着有效结论，把结论单独抽成一条结果，过程那条只描述过程。
+   - 过程不要带「等待验证」「暂定」这类未完成的语气当成结论写。
 
 只输出 JSON 数组，不要解释、不要代码块。每项格式：
-{"type":"decision|environment|principles","category":"决定|原因|约束|环境|偏好|事实","text":"一句话，含具体字面值","refId":"原样复制的 REF-ID","note":"归入哪篇笔记（优先复用已有标题，没有就新拟一个）","page":"归入哪个主题页，2–6 个字","entities":["这条事实涉及的具体名词"],"because":"如果这条是原因，写明它解释的是哪一条已有结论（抄那一条的原文开头 12–24 字）"}
+{"type":"decision|environment|principles","category":"决定|原因|约束|环境|偏好|事实|过程","text":"一句话，含具体字面值","refId":"原样复制的 REF-ID","note":"归入哪篇笔记（优先复用已有标题，没有就新拟一个）","page":"归入哪个主题页，2–6 个字","entities":["这条事实涉及的具体名词"],"because":"如果这条是原因，写明它解释的是哪一条已有结论（抄那一条的原文开头 12–24 字）"}
 
 entities 说明：填**可被搜索的具体名词**——文件路径、色值、接口/函数名、组件名、产品名、命令名。
 - 每条事实 1–4 个，超过 4 个说明这条事实不聚焦，应拆开。
@@ -430,6 +463,38 @@ function slugify(title) {
     .slice(0, 60) || `自动记忆-${Date.now()}`
 }
 
+/**
+ * 从 mem.json 反查「根目录 → 项目名」，用来给 frontmatter 填 project。
+ *
+ * 为什么不用写死的 'main'：别人从 git 装下来可能配置了多个工作区（roots 里各有
+ * name），写死会让所有笔记都标成 main。这里和 tools/mem/core.py 的
+ * load_projects() 遵循同一套规则，所以两边算出来的项目名一致。
+ *
+ * 兜底顺序：mem.json 里精确匹配 → 该目录的 basename → 'main'
+ * （最后一级只在 mem.json 缺失/读不出来时才会走到，与 core.py 的缺省行为一致）
+ */
+let projectRootMap = { at: -1, map: new Map() }
+function projectForRoot(root) {
+  const target = path.resolve(root || MEM)
+  try {
+    const cfgPath = path.join(WS, 'mem.json')
+    const st = fs.statSync(cfgPath)
+    if (st.mtimeMs !== projectRootMap.at) {
+      const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'))
+      const map = new Map()
+      for (const r of cfg.roots ?? []) {
+        if (!r || !r.path) continue
+        map.set(path.resolve(WS, r.path), String(r.name || 'main'))
+      }
+      projectRootMap = { at: st.mtimeMs, map }
+    }
+    const hit = projectRootMap.map.get(target)
+    if (hit) return hit
+  } catch { /* mem.json 没有或读不动，走兜底 */ }
+  if (target === path.resolve(WS, 'memory')) return 'main'
+  return path.basename(target) || 'main'
+}
+
 function appendFact(fact, refId, root = MEM) {
   const title = String(fact.note || fact.type || '自动记忆').trim()
   const file = path.join(root, `${slugify(title)}.md`)
@@ -465,7 +530,7 @@ function appendFact(fact, refId, root = MEM) {
     '---',
     `title: ${title}`,
     `type: ${type}`,
-    'project: main',
+    `project: ${projectForRoot(root)}`,
     'tags: [auto]',
     `created: ${today}`,
     '---',
@@ -479,13 +544,51 @@ function appendFact(fact, refId, root = MEM) {
   return true
 }
 
-function writeFacts(facts, refId, seen, root = MEM) {
+/**
+ * L1 写入闸门：把一批待写入事实交给常驻服务判重。
+ * 判据见 tools/mem/gate.py（余弦 + 字面值 + 类别 + 元数据四道闸，与 audit 同口径）。
+ * 任何失败都返回 null —— 闸门坏掉只能退化成"少去重"，绝不能阻断写入。
+ *
+ * 已知局限：索引由 `mem index --update` 异步更新，同一批次刚写入的条目可能还没进库，
+ * 闸门看不到它们；这部分由前面的 existingFacts() 字面包含兜底。
+ */
+async function gateCheck(facts) {
+  if (!DEDUPE_GATE) return null
+  const batch = facts.slice(0, MAX_ITEMS)
+  if (!batch.length) return null
+  const items = batch.map((f) => ({
+    text: String(f.text || '').trim(),
+    category: String(f.category || '事实').trim(),
+    note: `${slugify(String(f.note || f.type || '自动记忆').trim())}.md`,
+  }))
+  try {
+    const raw = await ask({ op: 'dupcheck', items }, GATE_TIMEOUT_MS)
+    if (!raw) return null
+    const data = JSON.parse(raw)
+    if (data.error || !Array.isArray(data.results)) return null
+    return data.results
+  } catch (e) {
+    note({ ev: 'gate_error', err: String(e).slice(0, 120) })
+    return null
+  }
+}
+
+async function writeFacts(facts, refId, seen, root = MEM) {
   const known = existingFacts(root)
-  let written = 0, dup = 0
-  for (const f of facts.slice(0, MAX_ITEMS)) {
+  const verdicts = await gateCheck(facts)
+  let written = 0, dup = 0, gated = 0
+  for (let i = 0; i < facts.length && i < MAX_ITEMS; i++) {
+    const f = facts[i]
     const key = normText(f.text)
     if (seen.has(key) || (key.length > 8 && [...known].some((k) => k.includes(key) || key.includes(k)))) {
       dup++
+      continue
+    }
+    const verdict = verdicts?.[i]
+    if (verdict?.verdict === 'dup') {
+      gated++
+      note({ ev: 'gate_skip', score: verdict.score, line: verdict.target_line,
+             note: String(f.note || '').slice(0, 40) })
       continue
     }
     try {
@@ -498,12 +601,17 @@ function writeFacts(facts, refId, seen, root = MEM) {
       note({ ev: 'write_fail', err: String(e) })
     }
   }
+  if (verdicts) {
+    const scores = verdicts.map((v) => v?.score).filter((s) => typeof s === 'number')
+    note({ ev: 'gate', n: verdicts.length, gated,
+           maxScore: scores.length ? Math.max(...scores) : null })
+  }
   if (written) {
     try {
       spawn(pyNow(), [CLI, 'index', '--update'], { cwd: WS, stdio: 'ignore' }).on('error', () => {}).unref()
     } catch { /* ignore */ }
   }
-  return { written, dup }
+  return { written, dup, gated }
 }
 
 
@@ -575,7 +683,8 @@ async function rebuildPages(ctx, llm, root = MEM, project = null) {
       note({ ev: 'page_search_fail', label: page.name, err: String(e).slice(0, 120) })
       continue
     }
-    const facts = hits.filter((h) => h.kind === 'obs').slice(0, 24)
+    // 过程类不进主题页面：页面写的是「这个主题现在是什么样」，过程是当时的动作，会过期
+    const facts = hits.filter((h) => h.kind === 'obs' && h.cat !== '过程').slice(0, 24)
     if (facts.length < PAGE_MIN_FACTS) {
       note({ ev: 'page_skip', label: page.name, n: facts.length })
       continue
@@ -597,7 +706,7 @@ async function rebuildPages(ctx, llm, root = MEM, project = null) {
         '---',
         `title: ${page.name}`,
         'type: page',
-        'project: main',
+        `project: ${project || projectForRoot(root)}`,
         'tags: [page]',
         `created: ${today}`,
         `summary: ${JSON.stringify(summary)}`,
@@ -710,8 +819,14 @@ function registerTools(ctx) {
   })
 }
 
-async function distillJsonl(ctx, llm, jsonl) {
-  const system = `${EXTRACT_PROMPT}\n${existingTitles().join('、')}`
+async function distillJsonl(ctx, llm, jsonl, prelude = '') {
+  const system = [
+    EXTRACT_PROMPT,
+    prelude
+      ? `【上一轮停顿点 · 仅背景】\n下面这段是上一轮结束时的上下文，只用于理解「改成这样」「就是这个」之类的指代。\n**严禁从中抽出任何事实**——可提炼的素材只有下面 JSONL 里的轮次。\n${prelude}`
+      : '',
+    `【已有笔记标题】\n${existingTitles().join('、')}`,
+  ].filter(Boolean).join('\n\n')
   const chunks = chunkJsonl(jsonl)
   const facts = []
   const usage = { input_tokens: 0, output_tokens: 0 }
@@ -886,7 +1001,7 @@ async function backfillOne(ctx) {
 
     const t0 = Date.now()
     const { facts, usage } = await distillJsonl(ctx, llm, jsonl)
-    const res = writeFacts(facts, `conversation:${next.id}`, new Set(state.done[next.id]?.seen ?? []), info.root)
+    const res = await writeFacts(facts, `conversation:${next.id}`, new Set(state.done[next.id]?.seen ?? []), info.root)
 
     state.done[next.id] = { at: new Date().toISOString(), turns: turns.length,
                             facts: facts.length, written: res.written, dup: res.dup,
@@ -941,8 +1056,10 @@ async function drainQueue(ctx) {
   for (const item of q) {
     if (Date.now() < (item.nextAt || 0)) { keep.push(item); continue }
     try {
-      const { facts } = await distillJsonl(llm, item.jsonl)
-      const res = writeFacts(facts, item.refId, new Set(item.seen || []), item.root || MEM)
+      // 修：原先写成 distillJsonl(llm, item.jsonl)，参数错位（签名是 ctx, llm, jsonl），
+      // 导致失败重放必然抛错、被静默丢弃。
+      const { facts } = await distillJsonl(ctx, llm, item.jsonl, item.prelude || '')
+      const res = await writeFacts(facts, item.refId, new Set(item.seen || []), item.root || MEM)
       ok++
       note({ ev: 'queue_ok', written: res.written })
     } catch (e) {
@@ -1045,22 +1162,24 @@ async function run(ctx, agent, id, force = false) {
       return
     }
 
-    const payload = [...context, ...fresh]
+    // L0：默认只把 fresh 当可抽取素材；context 压成一句停顿点放进 system。
+    const payload = EXTRACT_CONTEXT ? [...context, ...fresh] : fresh
+    const prelude = EXTRACT_CONTEXT ? '' : preludeFrom(context)
     const jsonl = renderJsonl(id, payload)
     const digest = hash(jsonl)
     const seen = new Set(sess.seen)
     const t0 = Date.now()
     let facts, usage, chunks = 0
     try {
-      ({ facts, usage, chunks } = await distillJsonl(ctx, llm, jsonl))
+      ({ facts, usage, chunks } = await distillJsonl(ctx, llm, jsonl, prelude))
     } catch (e) {
       // 失败落盘 → 之后重放，不依赖这次会话还没结束
-      enqueue({ refId, root: info.root, jsonl, seen: [...seen] })
+      enqueue({ refId, root: info.root, jsonl, prelude, seen: [...seen] })
       note({ ev: 'queued', reason: String(e).slice(0, 80) })
       return
     }
 
-    const { written, dup } = writeFacts(facts, refId, seen, info.root)
+    const { written, dup, gated } = await writeFacts(facts, refId, seen, info.root)
     const turnsCount = (sess.turns ?? 0) + 1
     state.sessions[id] = {
       anchorTurns: turns.length,
@@ -1080,14 +1199,16 @@ async function run(ctx, agent, id, force = false) {
       rebuildPages(ctx, llm, info.root, info.project).catch((e) => note({ ev: 'page_fail', err: String(e) }))
     }
     note({ ev: 'distill', ms: Date.now() - t0, project: info.project,
+           sid: String(id).slice(0, 12),
            provider: modelPick?.provider, model: modelPick?.model,
            totalTurns: turns.length, from: start, fresh: fresh.length, context: context.length,
+           preludeChars: prelude.length, extractContext: EXTRACT_CONTEXT || undefined,
            fallback: usedFallback || undefined,
            chars: jsonl.length, charsPerCall: Math.round(jsonl.length / Math.max(1, chunks)),
-           chunks, facts: facts.length, written, dup, usage })
+           chunks, facts: facts.length, written, dup, gated, usage })
   } catch (e) {
     if (/model|provider|unknown/i.test(String(e))) forgetModel()
-    note({ ev: 'distill_error', err: String(e) })
+    note({ ev: 'distill_error', sid: String(id).slice(0, 12), err: String(e) })
   } finally {
     st.running = false
     if (st.again) {
@@ -1119,9 +1240,13 @@ function injectionMessage(text) {
 }
 
 function compose(contextText, first) {
+  // 旧版写的是「可能只是擦边；判断后再用」——这句本身就在诱导复核，
+  // 实测注入组因此多花数倍预算。改成按核验状态给行动指令。
+  const legend = '✅ = 引用的文件/符号/数值在核验时点仍在，可直接当事实用，不必再核对原文；\n'
+    + '🔗 = 没有可核验的引用，要当结论用请打开原文。\n\n'
   const head = first
-    ? '🧠 你有本地长期记忆库（memory/），下面是从中检索到的相关内容。它可能与当前问题有关，也可能只是擦边；判断后再用。\n\n'
-    : '🧠 本地长期记忆里可能相关的内容：\n\n'
+    ? `🧠 你有本地长期记忆库（memory/），下面是从中检索到的内容，每条都标了核验状态：\n${legend}`
+    : `🧠 本地长期记忆里可能相关的内容：\n${legend}`
   const body = contextText.length > MAX_OUT ? `${contextText.slice(0, MAX_OUT)}…` : contextText
   return `${head}${body}\n\n（来自本机记忆库 memory/。需要更多可调用 mem_search，写入用 mem_write_note。）`
 }
