@@ -1089,7 +1089,13 @@ window.__ModuleLoader__.load({
         const dl = m.downloads?.[o.id]
         const action = o.downloaded
           ? (o.active
-            ? h('span', { style: { ...S.statSub } }, t('modelActive'))
+            ? h('button', {
+                disabled: true,
+                style: {
+                  ...S.btn, fontSize: 11.5, width: 104, boxSizing: 'border-box', justifyContent: 'center',
+                  opacity: 0.55, cursor: 'default', pointerEvents: 'none',
+                },
+              }, t('modelActive'))
             : h('button', {
                 style: { ...S.btn, fontSize: 11.5, width: 104, boxSizing: 'border-box', justifyContent: 'center' },
                 onClick: () => post({ action: 'setEmbed', model: o.id }),
@@ -1113,7 +1119,7 @@ window.__ModuleLoader__.load({
         },
           h('div', { style: { minWidth: 0 } },
             h('div', { style: { fontSize: 12.5, fontWeight: o.active ? 600 : 500 } },
-              `${o.active ? '● ' : '○ '}${o.label}　${o.size}`),
+              `${o.label}　${o.size}`),
             h('div', { style: { ...S.statSub, marginTop: 2 } }, o.note)),
           h('div', { style: { display: 'flex', gap: 6, flex: 'none' } }, action))
       })
