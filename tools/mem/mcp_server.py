@@ -121,7 +121,7 @@ def write_note(title, content, type_="note", tags=None, append=False, project="m
         old = path.read_text(encoding="utf-8").rstrip()
         path.write_text(old + "\n" + content.strip() + "\n", encoding="utf-8")
     else:
-        fm = ["---", f"title: {title}", f"type: {type_}"]
+        fm = ["---", f"title: {title}", f"type: {type_}", f"project: {project or 'main'}"]
         if tags:
             fm.append("tags: [" + ", ".join(tags) + "]")
         fm.append("---")
