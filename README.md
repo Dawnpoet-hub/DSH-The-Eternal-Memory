@@ -19,11 +19,61 @@
 
 ---
 
-## 安装
+## 安装（从 GitHub）
 
-1. 把本目录放到任意位置
-2. 在 DSH 的 profile 里注册这个 bundle（`dsh.profile.bundles` 加上 `@local/long-memory`，并在 `dependencies` 里用 `link:` 指向本目录）
-3. 重启 DSH
+### 1. 克隆到一个固定位置
+
+```bash
+mkdir -p ~/dsh-plugins
+git clone https://github.com/Dawnpoet-hub/DSH-The-Eternal-Memory.git ~/dsh-plugins/DSH-The-Eternal-Memory
+```
+
+> 路径选定后别随便移动，profile 里记录的是**绝对路径**。
+
+### 2. 在 profile 里登记这个插件
+
+编辑 `~/.dsh/profiles/desktop/package.json`，改两处：
+
+```jsonc
+{
+  "dependencies": {
+    "@local/dsh-the-eternal-memory": "link:/Users/你的用户名/dsh-plugins/DSH-The-Eternal-Memory"
+  },
+  "dsh": {
+    "profile": {
+      "bundles": [
+        "...其他插件...",
+        "@local/dsh-the-eternal-memory"
+      ]
+    }
+  }
+}
+```
+
+- `link:` 后面必须是**绝对路径**
+- `bundles` 数组里加上包名，顺序不影响功能
+
+### 3. 建立 node_modules 链接
+
+```bash
+cd ~/.dsh/profiles/desktop
+mkdir -p node_modules/@local
+ln -sfn ~/dsh-plugins/DSH-The-Eternal-Memory node_modules/@local/dsh-the-eternal-memory
+```
+
+### 4. 重启 DSH
+
+重启后左侧栏应出现「**长期记忆**」入口。
+（第一次可能只出现入口、记忆工具还没注册——按下一步走完再重启一次即可。）
+
+### 验证安装是否成功
+
+```bash
+# 应能打印 3.11.x
+node -e "console.log(require('$HOME/.dsh/profiles/desktop/node_modules/@local/dsh-the-eternal-memory/package.json').version)"
+```
+
+或者直接打开面板：能看到「运行状态」九步和「记忆概览」，说明插件已加载。
 
 ---
 
