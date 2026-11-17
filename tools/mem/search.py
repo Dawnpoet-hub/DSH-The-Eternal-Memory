@@ -160,7 +160,7 @@ def _graph(db, seeds, limit, project=None):
             continue
         for a, b, etype, weight in db.execute(
             "SELECT a,b,etype,weight FROM edges WHERE (a=? OR b=?)" + (" AND project=?" if project else "") + " ORDER BY weight DESC LIMIT 8",
-            (start_oid, start_oid),
+            (start_oid, start_oid, project) if project else (start_oid, start_oid),
         ):
             other = b if a == start_oid else a
             row = db.execute("SELECT note_id FROM obs WHERE id=?", (other,)).fetchone()
