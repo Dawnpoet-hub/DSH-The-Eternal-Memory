@@ -5,3 +5,6 @@ node_modules/
 tools/mem/.venv/
 tools/mem/.fastembed/
 __pycache__/
+
+# 改源码前手动留的备份（auto.js.bak-xxx 之类），不进仓库
+*.bak-*
