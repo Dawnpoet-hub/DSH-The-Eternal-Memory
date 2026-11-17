@@ -28,7 +28,8 @@ const FALLBACK_TURNS = 20                                            // 锚点�
 const CHUNK_CHARS = 12_000       // 与 Hindsight 的 retain_chunk_size 一致
 const MAX_CHUNKS = 3
 const MAX_ITEMS = 8
-const PAGE_EVERY = Number(process.env.MEM_AUTO_PAGE_EVERY ?? 10)   // 每多少轮重建一次页面
+const PAGE_EVERY = Number(process.env.MEM_AUTO_PAGE_EVERY ?? 10)
+let pendingPageRebuild = false   // 用户要求「重建主题页面」时置位，在 turn-stopping 里执行   // 每多少轮重建一次页面
 const PAGE_MIN_FACTS = 3
 const PAGES_DIR = path.join(MEM, 'pages')
 const DISTILL_TIMEOUT = 120_000
@@ -1155,6 +1156,13 @@ export function apply(ctx) {
       }
 
       const prompt = promptOf(decision.messages)
+
+      // 允许随时手动重建主题页面（不用等攒够 10 轮）
+      if (prompt && /(重建|生成|刷新)\s*(主题)?页面|rebuild\s+pages/i.test(prompt)) {
+        pendingPageRebuild = true
+        note({ ev: 'page_rebuild_requested' })
+      }
+
       if (!prompt || prompt.length < MIN_PROMPT) return decision
       if (prompt.startsWith('/') || prompt.startsWith('[')) return decision
 
@@ -1183,6 +1191,13 @@ export function apply(ctx) {
   }, { prepend: true })
 
   ctx.on('agent/turn-stopping', ({ agent }) => {
+    if (pendingPageRebuild) {
+      pendingPageRebuild = false
+      const llm = ctx.get ? ctx.get('llm') : undefined
+      rebuildPages(ctx, llm, MEM)
+        .then((n) => note({ ev: 'page_rebuilt', count: n }))
+        .catch((e) => note({ ev: 'page_fail', err: String(e).slice(0, 200) }))
+    }
     maybeDistill(ctx, agent)
     drainQueue(ctx).catch(() => { /* 重试失败不影响对话 */ })
     backfillStep(ctx).catch(() => { /* 回填失败不影响对话 */ })
