@@ -718,9 +718,10 @@ function downloadModel(model, kind) {
 
   const cache = path.join(TOOLS, '.fastembed')
   const py = pyBin()
+  const lit = JSON.stringify(model)   // 用 JSON 字符串字面量，避免拼接出错
   const script = kind === 'rerank'
-    ? 'from fastembed.rerank.cross_encoder import TextCrossEncoder as C; list(C(\'%s\').rerank("预热", ["记住这件事"]))' % model
-    : 'from fastembed import TextEmbedding; list(TextEmbedding(\'%s\').embed(["预热"]))' % model
+    ? `from fastembed.rerank.cross_encoder import TextCrossEncoder as C; list(C(${lit}).rerank("预热", ["记住这件事"]))`
+    : `from fastembed import TextEmbedding; list(TextEmbedding(${lit}).embed(["预热"]))`
 
   let fd = 'ignore'
   try { fd = openSync(logPath, 'a') } catch { fd = 'ignore' }
