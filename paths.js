@@ -32,13 +32,36 @@ function resolveWorkspace() {
 
 export const WS = resolveWorkspace()
 export const TOOLS = path.join(WS, 'tools', 'mem')
-// Python 解释器优先级：显式环境变量 > 插件自带 venv > 系统 python3
+// 找 DSH 自带的 Python 运行时（桌面版会随运行时装一份 3.12）
+function findDshPython() {
+  try {
+    const roots = [
+      path.join(os.homedir(), '.dsh', 'dsh-runtimes'),
+      path.join(os.homedir(), '.dsh', 'runtimes'),
+    ]
+    for (const root of roots) {
+      if (!fs.existsSync(root)) continue
+      for (const rt of fs.readdirSync(root)) {
+        const bin = path.join(root, rt, 'dependencies', 'python', 'bin')
+        if (!fs.existsSync(bin)) continue
+        const cand = fs.readdirSync(bin).filter((f) => /^python3(\.\d+)?$/.test(f)).sort().pop()
+        if (cand) return path.join(bin, cand)
+      }
+    }
+  } catch { /* ignore */ }
+  return null
+}
+
+const DSH_PY = findDshPython()
+
+// Python 解释器优先级：显式环境变量 > 插件自带 venv > DSH 自带运行时 > 系统 python3
 function resolvePython() {
   if (process.env.LONG_MEMORY_PYTHON) return process.env.LONG_MEMORY_PYTHON
   const venvPy = path.join(TOOLS, '.venv', 'bin', 'python')
   try { if (fs.existsSync(venvPy)) return venvPy } catch { /* ignore */ }
   const venvPyWin = path.join(TOOLS, '.venv', 'Scripts', 'python.exe')
   try { if (fs.existsSync(venvPyWin)) return venvPyWin } catch { /* ignore */ }
+  if (DSH_PY) return DSH_PY
   return 'python3'
 }
 
@@ -64,16 +87,11 @@ export const paths = { WS, TOOLS, PY, CLI, SERVE, MEM, STATE_DIR }
 let pyProbe = null
 export function pythonAvailable() {
   if (pyProbe !== null) return pyProbe
-  try {
-    if (PY !== 'python3') pyProbe = fs.existsSync(PY)
-    else {
-      pyProbe = ['python3', 'python'].some((cmd) => {
-        try {
-          return spawnSync(cmd, ['--version'], { timeout: 4000 }).status === 0
-        } catch { return false }
-      })
-    }
-  } catch { pyProbe = false }
+  const tryCmd = (cmd) => {
+    try { return spawnSync(cmd, ['--version'], { timeout: 4000 }).status === 0 } catch { return false }
+  }
+  if (PY !== 'python3') pyProbe = fs.existsSync(PY) || tryCmd(PY)
+  else pyProbe = tryCmd('python3') || tryCmd('python')
   return pyProbe
 }
 
