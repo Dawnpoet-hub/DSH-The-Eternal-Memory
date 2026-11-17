@@ -824,6 +824,14 @@ function createHandler() {
       }
       if (req.method === 'GET' && route === 'overview') {
         const stats = await mem(['stats', '--json', ...projArgs])
+        // 与「关联线索」页展示的条数保持一致：手写 [[链接]] + 推导出的四类边
+        try {
+          const [links, edges] = await Promise.all([
+            mem(['relations', '--json', ...projArgs]).catch(() => []),
+            mem(['edges', '--json']).catch(() => ({ items: [] })),
+          ])
+          stats.rel = (links || []).length + (((edges && edges.items) || []).length)
+        } catch { /* 失败就保留原值 */ }
         const events = readLog(4000)
         const lastDistill = [...events].reverse().find((e) => e.ev === 'distill')
         return send(res, 200, {
