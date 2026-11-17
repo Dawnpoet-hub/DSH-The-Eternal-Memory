@@ -608,66 +608,19 @@ function dirSize(dir) {
   return total
 }
 
-function modelDir(model) {
-  return path.join(TOOLS, '.fastembed', `models--${model.replace('/', '--')}`)
-}
-
-function downloadProgress() {
-  const out = {}
-  for (const [model, info] of DOWNLOADS) {
-    // 优先读 fetch_model.py 写出的字节进度；没有则回退到缓存增长估算
-    let bytes = 0
-    let total = 0
-    let state = info.status ?? 'running'
-    let error = info.error ?? null
-    try {
-      if (info.progressFile && existsSync(info.progressFile)) {
-        const p = JSON.parse(readFileSync(info.progressFile, 'utf8'))
-        bytes = Number(p.done) || 0
-        total = Number(p.total) || 0
-        if (p.state === 'done') { state = 'done'; bytes = total || bytes }
-        if (p.state === 'error') { state = 'error'; error = p.error || error }
-      } else {
-        const cur = dirSize(path.join(TOOLS, '.fastembed'))
-        bytes = Math.max(0, cur - (info.baseline ?? 0))
-      }
-    } catch { bytes = 0 }
-    const expected = total || Math.max(1, info.expectedGB * 1024 ** 3)
-    const pct = total > 0
-      ? Math.min(99, Math.round((bytes / total) * 100))
-      : 0
-    const progress = bytes === 0 ? 0 : Math.max(1, pct)
-    out[model] = {
-      progress, bytes, expected,
-      status: state,
-      error,
-      tail: (() => {
-        try { return readFileSync(info.log, 'utf8').split('\n').filter(Boolean).slice(-2).join(' ').slice(-160) } catch { return '' }
-      })(),
+function modelDirs(model) {
+  // fastembed 实际用的仓库名可能和模型 id 不同（bge-small → Qdrant/…，reranker → onnx-community/…），
+  // 所以按「名字片段」找目录，而不是按 id 拼路径
+  const token = model.split('/').pop().toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 10)
+  const root = path.join(TOOLS, '.fastembed')
+  const dirs = []
+  try {
+    for (const e of readdirSync(root, { withFileTypes: true })) {
+      if (!e.isDirectory()) continue
+      if (e.name.toLowerCase().replace(/[^a-z0-9]/g, '').includes(token)) dirs.push(path.join(root, e.name))
     }
-  }
-  return out
-}
-
-const MODEL_CATALOG = {
-  // 只保留 3 档：fastembed 支持 41 个向量模型，其中中文可用的有 7 个，
-  // 其余几档（mpnet / MiniLM / potion / jina-v3）要么更弱、要么未实测，不放进界面
-  embed: [
-    { id: 'BAAI/bge-small-zh-v1.5', gb: 0.09, label: '中文·轻量（默认）', size: '约 90MB · 512维', note: '中文短句够用；速度最快、占用最小，日常首选' },
-    { id: 'jinaai/jina-embeddings-v2-base-zh', gb: 0.64, label: '中文·增强', size: '约 640MB · 768维', note: '中文专用长文本模型，语义更细腻，检索更准' },
-    { id: 'intfloat/multilingual-e5-large', gb: 2.24, label: '多语言·最强', size: '约 2.2GB · 1024维', note: '检索专用、精度最高；建索引慢、占内存多' },
-  ],
-  rerank: [
-    { id: 'BAAI/bge-reranker-v2-m3-int8', gb: 0.57, label: '精确重排', size: '约 560MB', note: '对候选逐条精算相关性，明显减少「擦边」结果' },
-  ],
-}
-
-function readMemCfg() {
-  try { return JSON.parse(readFileSync(path.join(WS, 'mem.json'), 'utf8')) } catch { return {} }
-}
-
-function writeMemCfg(cfg) {
-  writeFileSync(path.join(WS, 'mem.json'), JSON.stringify(cfg, null, 2) + '\n')
+  } catch { /* ignore */ }
+  return dirs
 }
 
 function knownGB(model) {
@@ -677,10 +630,11 @@ function knownGB(model) {
 
 function modelCacheHas(model, expectedGB) {
   try {
-    const dir = modelDir(model)
-    if (!existsSync(dir)) return false
+    const dirs = modelDirs(model)
+    if (!dirs.length) return false
     const want = (expectedGB ?? 0.5) * 1024 ** 3 * 0.85
-    return dirSize(dir) >= want
+    const got = dirs.reduce((n, d) => n + dirSize(d), 0)
+    return got >= want
   } catch { return false }
 }
 
@@ -727,7 +681,8 @@ function downloadModel(model, kind) {
 
   let fd = 'ignore'
   try { fd = openSync(logPath, 'a') } catch { fd = 'ignore' }
-  const child = spawn(py, [scriptPath, model, progressFile, cache, ...(kind === 'rerank' ? ['--rerank'] : [])], {
+    const expectedBytes = Math.round((known?.gb ?? 0.6) * 1024 ** 3)
+  const child = spawn(py, [scriptPath, model, progressFile, cache, String(expectedBytes), ...(kind === 'rerank' ? ['--rerank'] : [])], {
     detached: true, stdio: ['ignore', fd, fd], cwd: WS,
     env: { ...process.env, FASTEMBED_CACHE_PATH: cache, PYTHONUNBUFFERED: '1' },
   })
