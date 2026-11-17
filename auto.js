@@ -29,7 +29,8 @@ const CHUNK_CHARS = 12_000       // 与 Hindsight 的 retain_chunk_size 一致
 const MAX_CHUNKS = 3
 const MAX_ITEMS = 8
 const PAGE_EVERY = Number(process.env.MEM_AUTO_PAGE_EVERY ?? 10)
-let pendingPageRebuild = false   // 用户要求「重建主题页面」时置位，在 turn-stopping 里执行   // 每多少轮重建一次页面
+let pendingPageRebuild = false
+let lastSyncAt = 0   // 上次同步 DSH 工作区的时间（新工作区创建后要尽快登记）   // 用户要求「重建主题页面」时置位，在 turn-stopping 里执行   // 每多少轮重建一次页面
 const PAGE_MIN_FACTS = 3
 const PAGES_DIR = path.join(MEM, 'pages')
 const DISTILL_TIMEOUT = 120_000
@@ -1131,6 +1132,13 @@ export function apply(ctx) {
   note({ ev: 'plugin_loaded' })
   registerTools(ctx)
 
+  ctx.on('agent/session-start', (ev) => {
+      // 新会话开始时顺手同步一次工作区（60 秒节流），避免新工作区的记忆落到 main
+      if (Date.now() - lastSyncAt > 60_000) {
+        lastSyncAt = Date.now()
+        ask({ op: 'sync' }).catch(() => {})
+      }
+    })
   ctx.on('agent/session-start', ({ agent }) => {
     const id = agent?.session?.header?.id
     if (id) lastInjected.delete(id)
