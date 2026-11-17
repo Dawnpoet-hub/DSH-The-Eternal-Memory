@@ -591,9 +591,12 @@ function runSetupTask(kind) {
 // ---------------- 模型管理：随时可切换 ----------------
 
 const MODEL_CATALOG = {
+  // 只保留 3 档：fastembed 支持 41 个向量模型，其中中文可用的有 7 个，
+  // 其余几档（mpnet / MiniLM / potion / jina-v3）要么更弱、要么未实测，不放进界面
   embed: [
-    { id: 'BAAI/bge-small-zh-v1.5', label: '轻量（默认）', size: '约 90MB', note: '中文短句效果好，速度最快' },
-    { id: 'BAAI/bge-large-zh-v1.5', label: '更准（更大）', size: '约 1.3GB', note: '同一条记忆的语义更细腻，检索更准，但更慢更占内存' },
+    { id: 'BAAI/bge-small-zh-v1.5', label: '中文·轻量（默认）', size: '约 90MB · 512维', note: '中文短句够用；速度最快、占用最小，日常首选' },
+    { id: 'jinaai/jina-embeddings-v2-base-zh', label: '中文·增强', size: '约 640MB · 768维', note: '中文专用长文本模型，语义更细腻，检索更准' },
+    { id: 'intfloat/multilingual-e5-large', label: '多语言·最强', size: '约 2.2GB · 1024维', note: '检索专用、精度最高；建索引慢、占内存多' },
   ],
   rerank: [
     { id: 'BAAI/bge-reranker-v2-m3-int8', label: '精确重排', size: '约 560MB', note: '对候选逐条精算相关性，明显减少「擦边」结果' },
