@@ -65,6 +65,21 @@ def main() -> int:
     rerank = "--rerank" in sys.argv[5:]
 
     os.environ["FASTEMBED_CACHE_PATH"] = cache_dir
+    # Xet 传输通道在部分网络下会卡住不动，关掉它改用普通 HTTP 分块下载
+    os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
+
+    # 国内网络经常连不上 huggingface.co：先探一下，不通就走 hf-mirror 镜像
+    if not os.environ.get("HF_ENDPOINT"):
+        import urllib.request
+        def reachable(url, timeout=4):
+            try:
+                req = urllib.request.Request(url, method="HEAD")
+                with urllib.request.urlopen(req, timeout=timeout):
+                    return True
+            except Exception:
+                return False
+        if not reachable("https://huggingface.co"):
+            os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
     baseline = cache_bytes(cache_dir)
     write(out_path, {"done": 0, "total": total, "state": "running"})
 
