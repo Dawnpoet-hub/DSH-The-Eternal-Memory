@@ -34,14 +34,19 @@ export function fillMcpPatch(ws) {
   const patchPath = path.join(HERE, 'cordis.patch.yml')
   try {
     let text = fs.readFileSync(patchPath, 'utf8')
-    if (!text.includes('__LM_')) return { changed: false }
     const py = path.join(ws, 'tools', 'mem', '.venv', 'bin', 'python')
     const pyWin = path.join(ws, 'tools', 'mem', '.venv', 'Scripts', 'python.exe')
     const interp = fs.existsSync(py) ? py : fs.existsSync(pyWin) ? pyWin : 'python3'
+    const before = text
     text = text
       .replaceAll('__LM_PY__', interp)
       .replaceAll('__LM_MCP_SERVER__', path.join(ws, 'tools', 'mem', 'mcp_server.py'))
       .replaceAll('__LM_WS__', ws)
+      // 已填过的文件也要能更新：装了依赖之后把解释器从 python3 换成 venv 里的
+      .replace(/^(\s*command:\s*).*$/m, `$1${interp}`)
+      .replace(/^(\s*-\s*).*mcp_server\.py\s*$/m, `$1${path.join(ws, 'tools', 'mem', 'mcp_server.py')}`)
+      .replace(/^(\s*cwd:\s*).*$/m, `$1${ws}`)
+    if (text === before) return { changed: false, interp }
     fs.writeFileSync(patchPath, text)
     return { changed: true, interp }
   } catch (e) {

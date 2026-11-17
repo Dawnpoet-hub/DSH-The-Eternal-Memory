@@ -3,6 +3,7 @@
 import fs from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import path from 'node:path'
+import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
@@ -20,9 +21,13 @@ function resolveWorkspace() {
   if (hasTools(up2)) return up2
   // 安装后：插件在 profile/node_modules 里，工作区一般就是启动目录
   for (const cand of [process.cwd(), path.resolve(process.cwd(), '..')]) {
+    // 不要把插件自身目录当成工作区（否则 memory/ 会落在仓库里）
+    if (path.resolve(cand) === path.resolve(HERE)) continue
     if (hasTools(cand)) return cand
   }
-  return up2
+  // 兜底：没有既有工作区时，落到一个稳定、可写、可预期的地方，
+  // 而不是把 memory/ 建在 /tmp 或应用目录里
+  return path.join(os.homedir(), '.dsh', 'long-memory')
 }
 
 export const WS = resolveWorkspace()
