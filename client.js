@@ -1627,6 +1627,21 @@ window.__ModuleLoader__.load({
         note: [view.title ?? '', t('noteBody')],
       }[view.name] ?? ['', '']
 
+      // 主题页面按工作区分组，插入小标题行
+      const pageItems = (() => {
+        if (view.name !== 'pages') return null
+        const list = (rows ?? []).filter((r) => r.type === 'page')
+          .slice().sort((a, b) => String(a.project ?? '').localeCompare(String(b.project ?? '')))
+        const out = []
+        let cur = null
+        for (const r of list) {
+          const proj = r.project ?? 'main'
+          if (proj !== cur) { cur = proj; out.push({ __header: proj }) }
+          out.push(r)
+        }
+        return out
+      })()
+
       const rowOf = (r) => {
         if (view.name === 'points') {
           return { key: `${r.path}-${r.line}`, title: `[${r.cat}] ${r.text}`, meta: `← ${r.title}`,
@@ -1715,8 +1730,14 @@ window.__ModuleLoader__.load({
               (view.name === 'relations') ? null
               : h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6 } },
                 (view.name === 'pages'
-                  ? rows.filter((r) => r.type === 'page')
+                  ? pageItems
                   : (view.name === 'notes' && query.trim() && hits ? hits : rows)).map((r) => {
+                  if (r && r.__header) {
+                    return h('div', {
+                      key: `h-${r.__header}`,
+                      style: { ...S.statSub, marginTop: 6, marginBottom: 2, fontWeight: 600, opacity: 0.75 },
+                    }, r.__header)
+                  }
                   const v = view.name === 'notes' && query.trim() && hits
                     ? { key: `${r.path}-${r.line ?? ''}`, title: r.kind === 'obs' ? `[${r.cat}] ${r.text}` : r.title,
                         meta: r.kind === 'obs' ? `← ${r.title}` : `${r.project ?? ''} · ${r.path}`,
