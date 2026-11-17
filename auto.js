@@ -372,6 +372,24 @@ function parseFacts(text) {
   }
 }
 
+
+// 自动挑模型调用：按候选梯队逐个尝试，避免把 ctx 错当成 pick 传进去
+async function callModelAuto(ctx, llm, system, user) {
+  const seen = new Set()
+  const ladder = [modelPick, ...(await modelCandidates(ctx))]
+    .filter((p) => p && !seen.has(`${p.provider}/${p.model}`) && seen.add(`${p.provider}/${p.model}`))
+  let lastErr = null
+  for (const pick of ladder) {
+    try {
+      return await callModel(pick, llm, system, user)
+    } catch (e) {
+      lastErr = e
+      note({ ev: 'model_try_fail', where: 'auto', provider: pick.provider, model: pick.model, err: String(e).slice(0, 120) })
+    }
+  }
+  throw lastErr ?? new Error('no llm candidate')
+}
+
 async function callModel(pick, llm, system, user) {
   if (!pick) throw new Error('no llm candidate')
   const parts = []
@@ -545,7 +563,7 @@ async function rebuildPages(ctx, llm, root = MEM) {
     try {
       const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('page timeout')), DISTILL_TIMEOUT))
       const res = await Promise.race([
-        callModel(ctx, llm, PAGE_PROMPT, user),
+        callModelAuto(ctx, llm, PAGE_PROMPT, user),
         timeout,
       ])
       const md = String(res.text).trim()
@@ -641,7 +659,7 @@ async function reflect(ctx, symptom, project, root = MEM) {
 
   const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('reflect timeout')), DISTILL_TIMEOUT))
   const res = await Promise.race([
-    callModel(ctx, llm, REFLECT_PROMPT, `现象：${symptom}\n\n${evidence}`),
+    callModelAuto(ctx, llm, REFLECT_PROMPT, `现象：${symptom}\n\n${evidence}`),
     timeout,
   ])
   return String(res.text).trim() || '（模型没有返回内容）'
