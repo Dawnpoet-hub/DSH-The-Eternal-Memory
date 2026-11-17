@@ -1027,7 +1027,7 @@ window.__ModuleLoader__.load({
     }
 
     // 模型：随时切换向量模型与精确重排
-    function ModelPanel({ t }) {
+    function ModelDialog({ t, onClose }) {
       const [m, setM] = useState(null)
       const [msg, setMsg] = useState(null)
       const [open, setOpen] = useState(false)
@@ -1090,21 +1090,18 @@ window.__ModuleLoader__.load({
             onClick: () => post({ action: 'download', kind: 'rerank', model: rerank.current }),
           }, t('modelDownloadRerank'))
 
-      return h('section', { style: S.section },
-        h('button', {
-          onClick: () => setOpen(!open),
-          style: {
-            display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
-            width: '100%', cursor: 'pointer', color: 'inherit', textAlign: 'left',
-            background: 'transparent', border: 'none', padding: 0,
-          },
-        },
+      return h('div', { style: S.modalWrap, onClick: onClose },
+        h('div', { style: S.modal, onClick: (e) => e.stopPropagation() },
+        h('div', { style: { display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 } },
           h('div', { style: { minWidth: 0 } },
             h('div', { style: S.h2 }, t('modelsTitle')),
             h('div', { style: S.sub }, t('modelsSub'))),
-          h('span', { style: { fontSize: 11, opacity: 0.6 } }, open ? '▾' : '▸')),
+          h('button', {
+            style: { ...S.btn, padding: '2px 9px' }, onClick: onClose,
+            title: '关闭', 'aria-label': '关闭',
+          }, '✕')),
 
-        open ? h('div', { style: { ...S.card, display: 'flex', flexDirection: 'column', gap: 10 } },
+        h('div', { style: { ...S.card, display: 'flex', flexDirection: 'column', gap: 10, marginTop: 10 } },
           h('div', null,
             h('div', { style: S.statLabel }, t('modelsEmbed')),
             h('div', { style: { display: 'flex', flexDirection: 'column', gap: 8, marginTop: 6 } }, embedRows)),
@@ -1117,7 +1114,7 @@ window.__ModuleLoader__.load({
                   `${rerank.enabled ? t('modelOn') : t('modelOff')} · ${rerank.downloaded ? t('modelReady') : t('modelNotDownloaded')}`)),
               h('div', { style: { display: 'flex', gap: 6, flex: 'none' } }, rerankAction))),
 
-          msg ? h('div', { style: { ...S.statSub, opacity: 0.75 } }, msg) : null) : null)
+          msg ? h('div', { style: { ...S.statSub, opacity: 0.75 } }, msg) : null)))
     }
 
     // 详细数据：花费、命中率、速度、7 天趋势
@@ -1678,6 +1675,7 @@ window.__ModuleLoader__.load({
       const [msg, setMsg] = useState('')
       const [err, setErr] = useState('')
       const [moverOpen, setMoverOpen] = useState(false)
+      const [modelsOpen, setModelsOpen] = useState(false)
       const [reloadKey, setReloadKey] = useState(0)
       const [, forceTick] = useState(0)
       useEffect(() => {
@@ -1778,6 +1776,11 @@ window.__ModuleLoader__.load({
               }, t('refresh'))),
             h('div', { style: S.intro }, t('intro'))),
           h('button', {
+            style: S.moverBtn, onClick: () => setModelsOpen(true), title: t('modelsSub'),
+          },
+            h('span', { style: { fontSize: 13, lineHeight: 1 } }, '⚙'),
+            h('span', null, t('modelsTitle'))),
+          h('button', {
             style: S.moverBtn, onClick: () => setMoverOpen(true), title: t('moverSub'),
           },
             h('span', { style: { fontSize: 13, lineHeight: 1 } }, '⇄'),
@@ -1839,6 +1842,10 @@ window.__ModuleLoader__.load({
             })),
           h(Heatmap, { t }))
           : h(DetailData, { t })),
+
+        modelsOpen ? h(ModelDialog, {
+          t, onClose: () => setModelsOpen(false),
+        }) : null,
 
         moverOpen ? h(MoverDialog, {
           t, onClose: () => setMoverOpen(false), onRefresh: refresh,
