@@ -171,6 +171,9 @@ window.__ModuleLoader__.load({
         modelDownloadRerank: 'Download reranker (~560MB)',
         modelQueued: '已开始后台处理，完成后会自动刷新',
         modelSwitching: '正在切换并重建索引，稍等一下',
+        modelPreparing: '准备中…',
+        modelFailed: '下载失败，点一下重试',
+
       },
       en: {
         panel: 'Long-term memory',
@@ -327,6 +330,9 @@ window.__ModuleLoader__.load({
         modelDownloadRerank: 'Download reranker (~560MB)',
         modelQueued: 'Running in the background; this panel refreshes when done',
         modelSwitching: 'Switching and rebuilding the index, hold on',
+        modelPreparing: 'Preparing…',
+        modelFailed: 'Download failed — tap to retry',
+
     }
 
     // ---------- 样式（跟随宿主主题） ----------
@@ -1069,7 +1075,7 @@ window.__ModuleLoader__.load({
             transition: 'width .6s ease-out',
           },
         }),
-        h('span', { style: { position: 'relative' } }, `${pct}%`))
+        h('span', { style: { position: 'relative' } }, pct <= 0 ? t('modelPreparing') : `${pct}%`))
 
       const embedRows = (m.embed?.options ?? []).map((o) => {
         const dl = m.downloads?.[o.id]

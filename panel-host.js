@@ -1,7 +1,7 @@
 // Host 侧：给「长期记忆」面板提供本地 HTTP 接口。
 // 数据不另存一份，全部来自 tools/mem 的 Python 命令行与 memory/ 里的 Markdown。
 import { execFile, spawn, spawnSync } from 'node:child_process'
-import { existsSync, readFileSync, writeFileSync, appendFileSync, readdirSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync, appendFileSync, readdirSync, statSync, openSync } from 'node:fs'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -615,12 +615,26 @@ function modelDir(model) {
 function downloadProgress() {
   const out = {}
   for (const [model, info] of DOWNLOADS) {
+    // 用「缓存总量增长」而不是模型目录：HuggingFace 先把数据写进 blobs/，
+    // 模型目录里只放符号链接，按目录算会一直是 0
     let bytes = 0
-    try { bytes = dirSize(modelDir(model)) } catch { bytes = 0 }
+    try {
+      const total = dirSize(path.join(TOOLS, '.fastembed'))
+      bytes = Math.max(0, total - (info.baseline ?? 0))
+    } catch { bytes = 0 }
     const expected = Math.max(1, info.expectedGB * 1024 ** 3)
     const pct = Math.min(99, Math.round((bytes / expected) * 100))
-    if (bytes > 0 && pct >= 99) continue
-    out[model] = { progress: Math.max(1, pct), bytes, expected }
+    const elapsed = Date.now() - info.startedAt
+    // 还没写入任何字节时别假装有进度：前 20 秒显示「准备中」
+    const progress = bytes === 0 && elapsed < 20000 ? 0 : Math.max(1, pct)
+    out[model] = {
+      progress, bytes, expected,
+      status: info.status ?? 'running',
+      error: info.error ?? null,
+      tail: (() => {
+        try { return readFileSync(info.log, 'utf8').split('\n').filter(Boolean).slice(-2).join(' ').slice(-160) } catch { return '' }
+      })(),
+    }
   }
   return out
 }
@@ -694,19 +708,40 @@ function pyBin() {
 
 function downloadModel(model, kind) {
   const known = [...MODEL_CATALOG.embed, ...MODEL_CATALOG.rerank].find((m) => m.id === model)
-  DOWNLOADS.set(model, { startedAt: Date.now(), expectedGB: known?.gb ?? 0.6 })
+  const logPath = path.join(STATE_DIR, 'model-download.log')
+  try { appendFileSync(logPath, `\n[${new Date().toISOString()}] start ${model}\n`) } catch { /* ignore */ }
+  let baseline = 0
+  try { baseline = dirSize(path.join(TOOLS, '.fastembed')) } catch { baseline = 0 }
+  DOWNLOADS.set(model, {
+    startedAt: Date.now(), expectedGB: known?.gb ?? 0.6, status: 'running', log: logPath, baseline,
+  })
+
   const cache = path.join(TOOLS, '.fastembed')
   const py = pyBin()
   const script = kind === 'rerank'
     ? 'from fastembed.rerank.cross_encoder import TextCrossEncoder as C; list(C(\'%s\').rerank("预热", ["记住这件事"]))' % model
     : 'from fastembed import TextEmbedding; list(TextEmbedding(\'%s\').embed(["预热"]))' % model
+
+  let fd = 'ignore'
+  try { fd = openSync(logPath, 'a') } catch { fd = 'ignore' }
   const child = spawn(py, ['-c', script], {
-    detached: true, stdio: 'ignore', cwd: WS,
-    env: { ...process.env, FASTEMBED_CACHE_PATH: cache },
+    detached: true, stdio: ['ignore', fd, fd], cwd: WS,
+    env: { ...process.env, FASTEMBED_CACHE_PATH: cache, PYTHONUNBUFFERED: '1' },
   })
-  child.on('error', () => {})
+  const entry = DOWNLOADS.get(model)
+  child.on('error', (e) => {
+    entry.status = 'error'; entry.error = String(e.message)
+    try { appendFileSync(logPath, `spawn error: ${e.message}\n`) } catch { /* ignore */ }
+  })
+  child.on('exit', (code) => {
+    if (entry.status === 'error') return
+    entry.status = code === 0 ? 'done' : 'error'
+    entry.code = code
+    try { appendFileSync(logPath, `exit ${code}\n`) } catch { /* ignore */ }
+    if (code === 0) setTimeout(() => DOWNLOADS.delete(model), 3000)
+  })
   child.unref()
-  return { ok: true, background: true }
+  return { ok: true, background: true, log: logPath }
 }
 
 function switchEmbed(model) {
