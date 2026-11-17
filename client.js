@@ -156,6 +156,9 @@ window.__ModuleLoader__.load({
         pagesTitle: '主题页面',
         pagesSub: '同一主题的结论合成一页，点开可看可改',
 
+        scopeAll: '全部工作区',
+        scopeHint: '限定只在这个工作区里搜',
+
       },
       en: {
         panel: 'Long-term memory',
@@ -296,6 +299,9 @@ window.__ModuleLoader__.load({
         pagesSub: 'Conclusions merged per topic; open to read or edit',
 
       },
+        scopeAll: 'All workspaces',
+        scopeHint: 'Limit the search to one workspace',
+
     }
 
     // ---------- 样式（跟随宿主主题） ----------
@@ -1586,8 +1592,15 @@ window.__ModuleLoader__.load({
       const [pickPos, setPickPos] = useState(null)
       const [query, setQuery] = useState('')
       const [hits, setHits] = useState(null)
+      const [scope, setScope] = useState('')      // '' = 全部工作区
+      const [projects, setProjects] = useState([])
 
       // 笔记页内置语义搜索：说人话也能找到
+      useEffect(() => {
+        if (view.name !== 'notes') return
+        getJson('/projects').then((r) => setProjects(Array.isArray(r) ? r : (r?.projects ?? []))).catch(() => {})
+      }, [view.name])
+
       useEffect(() => {
         const q = query.trim()
         if (view.name !== 'notes' || !q) { setHits(null); return }
@@ -1596,14 +1609,14 @@ window.__ModuleLoader__.load({
           try {
             const res = await api('/search', {
               method: 'POST', headers: { 'content-type': 'application/json' },
-              body: JSON.stringify({ q, limit: 20 }),
+              body: JSON.stringify({ q, limit: 20, ...(scope ? { project: scope } : {}) }),
             })
             const data = await res.json()
             if (alive) setHits(Array.isArray(data) ? data : [])
           } catch { if (alive) setHits([]) }
         }, 280)
         return () => { alive = false; clearTimeout(timer) }
-      }, [query, view.name])
+      }, [query, scope, view.name])
       const meta = {
         notes: [t('notes'), t('notesSub')],
         points: [t('points'), t('pointsSub')],
@@ -1655,10 +1668,20 @@ window.__ModuleLoader__.load({
           h('div', { style: S.intro }, meta[1])),
 
         view.name === 'notes' ? h('div', null,
-          h('input', {
-            style: S.input, placeholder: t('searchPlaceholder'), value: query,
-            onChange: (e) => setQuery(e.target.value),
-          }),
+          h('div', { style: { display: 'flex', gap: 8, alignItems: 'center' } },
+            h('input', {
+              style: { ...S.input, flex: '1 1 auto' }, placeholder: t('searchPlaceholder'), value: query,
+              onChange: (e) => setQuery(e.target.value),
+            }),
+            h('select', {
+              style: { ...S.input, flex: '0 0 auto', width: 150 },
+              value: scope,
+              onChange: (e) => setScope(e.target.value),
+              title: t('scopeHint'),
+            },
+              h('option', { value: '' }, t('scopeAll')),
+              projects.map((pj) => h('option', { key: pj.name ?? pj, value: pj.name ?? pj },
+                pj.title ?? pj.name ?? pj)))),
           h('div', { style: { ...S.statSub, marginTop: 4 } }, t('searchHint'))) : null,
 
         view.name === 'note'
@@ -1751,6 +1774,11 @@ window.__ModuleLoader__.load({
       }, [project])
 
       useEffect(() => { refresh() }, [refresh])
+
+      useEffect(() => {
+        if (view.name !== 'notes') return
+        getJson('/projects').then((r) => setProjects(Array.isArray(r) ? r : (r?.projects ?? []))).catch(() => {})
+      }, [view.name])
 
       useEffect(() => {
         const q = query.trim()

@@ -1070,7 +1070,12 @@ async function run(ctx, agent, id, force = false) {
     }
     saveState(state)
 
-    if (PAGE_EVERY > 0 && turnsCount % PAGE_EVERY === 0) {
+    // 6 小时兜底：即使没攒够 10 次提炼，页面太旧也会重建
+    const pagesAt = state.pages?.[info.project ?? 'main'] ?? 0
+    const stale = Date.now() - pagesAt > 6 * 3600 * 1000
+    if (PAGE_EVERY > 0 && (turnsCount % PAGE_EVERY === 0 || (stale && pagesAt > 0))) {
+      state.pages = { ...(state.pages ?? {}), [info.project ?? 'main']: Date.now() }
+      saveState(state)
       rebuildPages(ctx, llm, info.root, info.project).catch((e) => note({ ev: 'page_fail', err: String(e) }))
     }
     note({ ev: 'distill', ms: Date.now() - t0, project: info.project,
