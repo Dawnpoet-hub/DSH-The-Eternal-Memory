@@ -1775,16 +1775,17 @@ window.__ModuleLoader__.load({
                 },
               }, t('refresh'))),
             h('div', { style: S.intro }, t('intro'))),
-          h('button', {
-            style: S.moverBtn, onClick: () => setModelsOpen(true), title: t('modelsSub'),
-          },
-            h('span', { style: { fontSize: 13, lineHeight: 1 } }, '⚙'),
-            h('span', null, t('modelsTitle'))),
-          h('button', {
-            style: S.moverBtn, onClick: () => setMoverOpen(true), title: t('moverSub'),
-          },
-            h('span', { style: { fontSize: 13, lineHeight: 1 } }, '⇄'),
-            h('span', null, t('mover'))))),
+          h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, flex: 'none' } },
+            h('button', {
+              style: S.moverBtn, onClick: () => setModelsOpen(true), title: t('modelsSub'),
+            },
+              h('span', { style: { fontSize: 13, lineHeight: 1 } }, '⚙'),
+              h('span', null, t('modelsTitle'))),
+            h('button', {
+              style: S.moverBtn, onClick: () => setMoverOpen(true), title: t('moverSub'),
+            },
+              h('span', { style: { fontSize: 13, lineHeight: 1 } }, '⇄'),
+              h('span', null, t('mover')))))),
 
         h(PipelinePanel, { t, key: `pl-${reloadKey}` }),
 
