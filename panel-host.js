@@ -615,22 +615,32 @@ function modelDir(model) {
 function downloadProgress() {
   const out = {}
   for (const [model, info] of DOWNLOADS) {
-    // 用「缓存总量增长」而不是模型目录：HuggingFace 先把数据写进 blobs/，
-    // 模型目录里只放符号链接，按目录算会一直是 0
+    // 优先读 fetch_model.py 写出的字节进度；没有则回退到缓存增长估算
     let bytes = 0
+    let total = 0
+    let state = info.status ?? 'running'
+    let error = info.error ?? null
     try {
-      const total = dirSize(path.join(TOOLS, '.fastembed'))
-      bytes = Math.max(0, total - (info.baseline ?? 0))
+      if (info.progressFile && existsSync(info.progressFile)) {
+        const p = JSON.parse(readFileSync(info.progressFile, 'utf8'))
+        bytes = Number(p.done) || 0
+        total = Number(p.total) || 0
+        if (p.state === 'done') { state = 'done'; bytes = total || bytes }
+        if (p.state === 'error') { state = 'error'; error = p.error || error }
+      } else {
+        const cur = dirSize(path.join(TOOLS, '.fastembed'))
+        bytes = Math.max(0, cur - (info.baseline ?? 0))
+      }
     } catch { bytes = 0 }
-    const expected = Math.max(1, info.expectedGB * 1024 ** 3)
-    const pct = Math.min(99, Math.round((bytes / expected) * 100))
-    const elapsed = Date.now() - info.startedAt
-    // 还没写入任何字节时别假装有进度：前 20 秒显示「准备中」
-    const progress = bytes === 0 && elapsed < 20000 ? 0 : Math.max(1, pct)
+    const expected = total || Math.max(1, info.expectedGB * 1024 ** 3)
+    const pct = total > 0
+      ? Math.min(99, Math.round((bytes / total) * 100))
+      : 0
+    const progress = bytes === 0 ? 0 : Math.max(1, pct)
     out[model] = {
       progress, bytes, expected,
-      status: info.status ?? 'running',
-      error: info.error ?? null,
+      status: state,
+      error,
       tail: (() => {
         try { return readFileSync(info.log, 'utf8').split('\n').filter(Boolean).slice(-2).join(' ').slice(-160) } catch { return '' }
       })(),
@@ -710,14 +720,14 @@ function downloadModel(model, kind) {
 
   const cache = path.join(TOOLS, '.fastembed')
   const py = pyBin()
-  const lit = JSON.stringify(model)   // 用 JSON 字符串字面量，避免拼接出错
-  const script = kind === 'rerank'
-    ? `from fastembed.rerank.cross_encoder import TextCrossEncoder as C; list(C(${lit}).rerank("预热", ["记住这件事"]))`
-    : `from fastembed import TextEmbedding; list(TextEmbedding(${lit}).embed(["预热"]))`
+  const slug = model.replace(/[^a-zA-Z0-9]+/g, '-')
+  const progressFile = path.join(STATE_DIR, `dl-${slug}.json`)
+  const scriptPath = path.join(BUNDLE_DIR, 'tools', 'mem', 'fetch_model.py')
+  DOWNLOADS.get(model).progressFile = progressFile
 
   let fd = 'ignore'
   try { fd = openSync(logPath, 'a') } catch { fd = 'ignore' }
-  const child = spawn(py, ['-c', script], {
+  const child = spawn(py, [scriptPath, model, progressFile, cache, ...(kind === 'rerank' ? ['--rerank'] : [])], {
     detached: true, stdio: ['ignore', fd, fd], cwd: WS,
     env: { ...process.env, FASTEMBED_CACHE_PATH: cache, PYTHONUNBUFFERED: '1' },
   })
