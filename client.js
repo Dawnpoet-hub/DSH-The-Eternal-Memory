@@ -1037,25 +1037,35 @@ window.__ModuleLoader__.load({
         return `${(bps / 1048576).toFixed(1)} MB/s`
       }
 
-      const progressButton = (pct, bytes, stalled, speed) => h('div', {
-        style: {
-          position: 'relative', overflow: 'hidden', width: 104, boxSizing: 'border-box', textAlign: 'center',
-          border: '1px solid color-mix(in srgb, currentColor 20%, transparent)',
-          borderRadius: 8, padding: '6px 12px', fontSize: 11.5,
-        },
-      },
-        h('div', {
+      const progressButton = (pct, bytes, stalled, speed) => {
+        const label = pct <= 0
+          ? t('modelPreparing')
+          : (stalled && stalled > 30)
+            ? `${((bytes || 0) / 1048576).toFixed(0)}MB · ${t('modelStalled', { n: stalled })}`
+            : `${Math.round(pct)}% · ${fmtSpeed(speed)}`
+        // 一行放不下就缩字号，不折行、不改高度
+        const size = label.length > 13 ? 9.5 : label.length > 10 ? 10.5 : 11
+        return h('div', {
           style: {
-            position: 'absolute', left: 0, top: 0, bottom: 0, width: `${pct}%`,
-            background: 'color-mix(in srgb, #5B8FF9 45%, transparent)',
-            transition: 'width .6s ease-out',
+            position: 'relative', overflow: 'hidden', width: 104, height: 30, boxSizing: 'border-box',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0 6px',
+            border: '1px solid color-mix(in srgb, currentColor 20%, transparent)', borderRadius: 8,
           },
-        }),
-        h('span', { style: { position: 'relative', fontSize: 11 } },
-          pct <= 0 ? t('modelPreparing')
-            : (stalled && stalled > 30)
-              ? `${((bytes || 0) / 1048576).toFixed(0)}MB · ${t('modelStalled', { n: stalled })}`
-              : `${Math.round(pct)}% · ${fmtSpeed(speed)}`))
+        },
+          h('div', {
+            style: {
+              position: 'absolute', left: 0, top: 0, bottom: 0, width: `${pct}%`,
+              background: 'color-mix(in srgb, #5B8FF9 45%, transparent)',
+              transition: 'width .6s ease-out',
+            },
+          }),
+          h('span', {
+            style: {
+              position: 'relative', fontSize: size, lineHeight: 1, whiteSpace: 'nowrap',
+              letterSpacing: '-0.2px',
+            },
+          }, label))
+      }
 
       const embedRows = (m.embed?.options ?? []).map((o) => {
         const dl = m.downloads?.[o.id]
@@ -1140,7 +1150,7 @@ window.__ModuleLoader__.load({
                   `${rerank.enabled ? t('modelOn') : t('modelOff')} · ${rerank.downloaded ? t('modelReady') : t('modelNotDownloaded')}`)),
               h('div', { style: { display: 'flex', gap: 6, flex: 'none' } }, rerankAction))),
 
-          msg ? h('div', { style: { ...S.statSub, opacity: 0.75 } }, msg) : null)))
+          )))
     }
 
     // 详细数据：花费、命中率、速度、7 天趋势
