@@ -660,26 +660,18 @@ function writeMemCfg(cfg) {
   writeFileSync(path.join(WS, 'mem.json'), JSON.stringify(cfg, null, 2) + '\n')
 }
 
-function modelCacheHas(model) {
+function knownGB(model) {
+  const all = [...MODEL_CATALOG.embed, ...MODEL_CATALOG.rerank]
+  return all.find((m) => m.id === model)?.gb ?? 0.6
+}
+
+function modelCacheHas(model, expectedGB) {
   try {
-    const dir = path.join(TOOLS, '.fastembed')
+    const dir = modelDir(model)
     if (!existsSync(dir)) return false
-    const needle = model.split('/').pop().toLowerCase().replace(/[^a-z0-9]/g, '')
-    const stack = [dir]
-    while (stack.length) {
-      const cur = stack.pop()
-      let entries = []
-      try { entries = readdirSync(cur, { withFileTypes: true }) } catch { continue }
-      for (const e of entries) {
-        const full = path.join(cur, e.name)
-        if (e.isDirectory()) {
-          if (e.name.toLowerCase().replace(/[^a-z0-9]/g, '').includes(needle.slice(0, 10))) return true
-          stack.push(full)
-        }
-      }
-    }
-  } catch { /* ignore */ }
-  return false
+    const want = (expectedGB ?? 0.5) * 1024 ** 3 * 0.85
+    return dirSize(dir) >= want
+  } catch { return false }
 }
 
 function modelStatus() {
@@ -689,15 +681,15 @@ function modelStatus() {
   return {
     embed: {
       current: embedCur,
-      downloaded: modelCacheHas(embedCur),
-      options: MODEL_CATALOG.embed.map((m) => ({ ...m, active: m.id === embedCur, downloaded: modelCacheHas(m.id) })),
+      downloaded: modelCacheHas(embedCur, knownGB(embedCur)),
+      options: MODEL_CATALOG.embed.map((m) => ({ ...m, active: m.id === embedCur, downloaded: modelCacheHas(m.id, m.gb) })),
     },
     downloads: downloadProgress(),
     rerank: {
       enabled: cfg.rerank?.enabled === true,
       current: rerankCur,
-      downloaded: modelCacheHas(rerankCur),
-      options: MODEL_CATALOG.rerank.map((m) => ({ ...m, active: m.id === rerankCur, downloaded: modelCacheHas(m.id) })),
+      downloaded: modelCacheHas(rerankCur, knownGB(rerankCur)),
+      options: MODEL_CATALOG.rerank.map((m) => ({ ...m, active: m.id === rerankCur, downloaded: modelCacheHas(m.id, m.gb) })),
     },
   }
 }

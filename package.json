@@ -1,6 +1,6 @@
 {
   "name": "@local/dsh-the-eternal-memory",
-  "version": "3.8.4",
+  "version": "3.8.5",
   "private": true,
   "description": "DSH-The-Eternal-Memory — 本地长期记忆插件：AI 记住你们聊过的事，全部以 Markdown 存在本机。",
   "type": "module",
