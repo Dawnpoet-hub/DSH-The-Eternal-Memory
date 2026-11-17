@@ -268,7 +268,6 @@ window.__ModuleLoader__.load({
         refresh: 'Refresh',
         refreshHint: 'Reload memory store and status',
         setupPythonLink: 'Get Python',
-      },
         modelsTitle: 'Models',
         modelsSub: 'Which retrieval model is in use; switch or enable reranking any time',
         modelsEmbed: 'Model used to find memories',
@@ -296,6 +295,7 @@ window.__ModuleLoader__.load({
         pagesTitle: 'Topic pages',
         pagesSub: 'Conclusions merged per topic; open to read or edit',
 
+      },
     }
 
     // ---------- 样式（跟随宿主主题） ----------
