@@ -63,6 +63,17 @@ def main():
                 continue
             text = S.context(q, top=int(req.get("top", 3)), budget=int(req.get("budget", 900)),
                              gate=True, project=req.get("project") or None)
+            # 页面对齐 Hindsight：只注入「页面名 + 路径 + 摘要」，需要细节时用 mem_read_page 打开
+            try:
+                pages = core.match_pages(q, limit=2)
+                if pages:
+                    lines = ["", "## 可读取的页面"]
+                    for pg in pages:
+                        tail = f"：{pg['summary']}" if pg["summary"] else ""
+                        lines.append(f"- {pg['title']}（{pg['path']}）{tail}")
+                    text = (text or "") + "\n".join(lines)
+            except Exception:
+                pass
             respond({"text": text or ""})
         except Exception as e:
             respond({"error": f"{type(e).__name__}: {e}"})

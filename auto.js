@@ -515,7 +515,7 @@ const PAGE_PROMPT = `你在维护一份「项目页面」：把这个主题**现
 2. 具体数值、颜色值、尺寸、文件路径、接口名、命令，**原样保留**，不许改写或概括。
 3. 不要编造材料里没有的东西；材料没覆盖的就不写。
 4. 用简洁的中文短句，不要营销腔，不要"综上所述"。
-5. 不要写一级标题（系统会加），只输出下面三节：
+5. 不要写一级标题（系统会加）。第一行必须是 SUMMARY: 加一句不超过 80 字的中文摘要（讲这一页整体是什么），然后空一行，再输出下面三节：
 
 ## 现在是什么
 （这个主题当前的事实状态，3–6 条）
@@ -585,8 +585,12 @@ async function rebuildPages(ctx, llm, root = MEM) {
     try {
       const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('page timeout')), DISTILL_TIMEOUT))
       const res = await Promise.race([callModelAuto(ctx, llm, PAGE_PROMPT, user), timeout])
-      const md = String(res.text).trim()
+      let md = String(res.text).trim()
       if (md.length < 60) { note({ ev: 'page_empty', label: page.name }); continue }
+      // 第一行 SUMMARY: … 抽出来放进 frontmatter，正文里去掉
+      const sm = md.match(/^SUMMARY[:：]\s*(.+)$/m)
+      const summary = sm ? sm[1].trim().slice(0, 120) : ''
+      if (sm) md = md.replace(sm[0], '').trim()
       fs.mkdirSync(path.join(root, 'pages'), { recursive: true })
       fs.writeFileSync(pageFile(page.name, root), [
         '---',
@@ -595,6 +599,7 @@ async function rebuildPages(ctx, llm, root = MEM) {
         'project: main',
         'tags: [page]',
         `created: ${today}`,
+        `summary: ${JSON.stringify(summary)}`,
         `source_query: ${JSON.stringify(page.query)}`,
         '---',
         '',

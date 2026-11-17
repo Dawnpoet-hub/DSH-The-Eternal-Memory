@@ -294,6 +294,52 @@ def check_content(type_name, text, schemas):
     return [f"这篇是「{type_name}」类型，必须至少有一条 {want} 开头的要点；你写的是 {have}"]
 
 
+
+def pages_index(root=None):
+    """列出所有主题页面：{title, path, summary, body}"""
+    base = (Path(root) if root else WS / "memory") / "pages"
+    out = []
+    if not base.exists():
+        return out
+    for f in sorted(base.glob("*.md")):
+        try:
+            raw = f.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        title, summary = f.stem, ""
+        if raw.startswith("---"):
+            end = raw.find("\n---", 3)
+            if end > 0:
+                fm = raw[3:end]
+                for line in fm.splitlines():
+                    if line.startswith("title:"):
+                        title = line.split(":", 1)[1].strip().strip('"')
+                    elif line.startswith("summary:"):
+                        summary = line.split(":", 1)[1].strip().strip('"')
+        out.append({
+            "title": title,
+            "path": str(f.relative_to(WS)).replace(os.sep, "/"),
+            "summary": summary,
+            "body": raw,
+        })
+    return out
+
+
+def match_pages(query, limit=2, min_score=0.12):
+    """按字面重合度挑出相关页面，用于注入「标题 + 摘要」而不是整页。"""
+    q = set(query or "")
+    out = []
+    for pg in pages_index():
+        text = f"{pg['title']} {pg['summary']} {pg['body'][:800]}"
+        chars = set(text)
+        if not chars:
+            continue
+        score = len(q & chars) / max(1, len(q))
+        if score >= min_score:
+            out.append((score, pg))
+    out.sort(key=lambda x: -x[0])
+    return [pg for _, pg in out[:limit]]
+
 # ---------------- 存储 ----------------
 
 SCHEMA = """

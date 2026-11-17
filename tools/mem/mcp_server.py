@@ -64,6 +64,15 @@ TOOLS = [
         },
     },
     {
+        "name": "mem_read_page",
+        "description": "读取某个主题页面的全文（页面是把同一主题的结论合成的一页）。给标题或路径。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"title": {"type": "string", "description": "页面标题或路径"}},
+            "required": ["title"],
+        },
+    },
+    {
         "name": "mem_read_note",
         "description": "按标题或路径读取一篇笔记的全文。",
         "inputSchema": {
@@ -100,6 +109,7 @@ _ANNOTATIONS = {
     "mem_read_note":  {"readOnlyHint": True,  "destructiveHint": False, "idempotentHint": True,  "openWorldHint": False},
     "mem_recent":     {"readOnlyHint": True,  "destructiveHint": False, "idempotentHint": True,  "openWorldHint": False},
     "mem_schema":     {"readOnlyHint": True,  "destructiveHint": False, "idempotentHint": True,  "openWorldHint": False},
+    "mem_read_page": {"readOnlyHint": True,  "destructiveHint": False, "idempotentHint": True,  "openWorldHint": False},
     "mem_write_note": {"readOnlyHint": False, "destructiveHint": True,  "idempotentHint": False, "openWorldHint": False},
     "mem_reindex":    {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True,  "openWorldHint": False},
 }
@@ -110,6 +120,18 @@ for _t in TOOLS:
 def _slug(title):
     s = "".join(c if c.isalnum() or c in "-_" else "-" for c in title.lower())
     return "-".join(filter(None, s.split("-")))[:60] or "note"
+
+
+
+def read_page(title_or_path):
+    """读取主题页面全文（按标题或路径）。"""
+    pages = _core.pages_index()
+    key = (title_or_path or "").strip()
+    for pg in pages:
+        if key in (pg["title"], pg["path"]) or key.lower() in pg["title"].lower():
+            return pg["body"]
+    names = "、".join(pg["title"] for pg in pages) or "（还没有页面）"
+    return f"没有找到《{key}》。现有页面：{names}"
 
 
 def write_note(title, content, type_="note", tags=None, append=False, project="main"):
@@ -162,6 +184,8 @@ def call_tool(name, args):
     if name == "mem_write_note":
         return write_note(args["title"], args["content"], args.get("type", "note"),
                           args.get("tags"), bool(args.get("append")), args.get("project", "main"))
+    if name == "mem_read_page":
+        return read_page(args["title"])
     if name == "mem_read_note":
         return read_note(args["title"]) or "（未找到）"
     if name == "mem_schema":
