@@ -66,6 +66,16 @@
 
 ---
 
+## 给开发者：提交前钩子
+
+本仓库带一个 pre-commit 钩子，会**拦下**把本机绝对路径提交上去的情况（`cordis.patch.yml` 必须用 `__LM_*` 占位符）。
+
+```bash
+npm run install-hooks     # 启用钩子（每个克隆执行一次）
+npm run reset-patch       # 提交前把本机路径换回占位符
+git add -A && git commit  # 此时若有本机路径会被拒绝
+```
+
 ## 常见问题
 
 **引导条一直显示「需要先安装 Python」**

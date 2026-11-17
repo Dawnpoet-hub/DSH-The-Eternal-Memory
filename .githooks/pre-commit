@@ -1,0 +1,29 @@
+#!/bin/sh
+# 拦住把本机绝对路径提交进仓库的提交
+# 触发条件：暂存区里的 cordis.patch.yml 含本机路径，或任意暂存文件含 /Users/ 、/home/ 、盘符路径
+
+fail=0
+
+if git diff --cached --name-only | grep -q '^cordis\.patch\.yml$'; then
+  if git show :cordis.patch.yml | grep -Eq '(/Users/|/home/|[A-Za-z]:[\\/]Users[\\/])'; then
+    echo "✗ cordis.patch.yml 里还有本机绝对路径，不能提交。" >&2
+    echo "  先运行：npm run reset-patch   然后 git add cordis.patch.yml" >&2
+    fail=1
+  fi
+fi
+
+# 兜底：任何暂存文件里出现用户主目录路径
+if [ "$fail" = "0" ]; then
+  hits=$(git diff --cached -U0 | grep -E '^\+.*(/Users/[A-Za-z0-9._-]+/|/home/[A-Za-z0-9._-]+/)' | head -3)
+  if [ -n "$hits" ]; then
+    echo "✗ 暂存内容包含本机绝对路径：" >&2
+    echo "$hits" >&2
+    echo "  请改成占位符或相对路径后再提交。" >&2
+    fail=1
+  fi
+fi
+
+if [ "$fail" = "1" ]; then
+  exit 1
+fi
+exit 0
