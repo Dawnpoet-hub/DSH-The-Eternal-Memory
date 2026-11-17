@@ -1,0 +1,50 @@
+{
+  "name": "@local/dsh-the-eternal-memory",
+  "version": "3.6.1",
+  "private": true,
+  "description": "DSH-The-Eternal-Memory — 本地长期记忆插件：AI 记住你们聊过的事，全部以 Markdown 存在本机。",
+  "type": "module",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "panel-host.js",
+    "auto.js",
+    "paths.js",
+    "zip.js",
+    "client.js",
+    "cordis.patch.yml",
+    "install.mjs",
+    "requirements.txt",
+    "locale/*.json",
+    "docs",
+    "icon.svg",
+    "bootstrap.js",
+    "tools",
+    "schemas",
+    "mem.template.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-layout"
+      ]
+    }
+  },
+  "scripts": {
+    "reset-patch": "node scripts/reset-patch.mjs"
+  },
+  "license": "MIT"
+}

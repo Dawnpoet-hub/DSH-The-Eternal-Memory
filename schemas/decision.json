@@ -1,0 +1,10 @@
+{
+  "required": [
+    "title",
+    "type",
+    "project"
+  ],
+  "required_observations": [
+    "决定"
+  ]
+}

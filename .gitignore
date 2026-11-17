@@ -1,0 +1,7 @@
+node_modules/
+.DS_Store
+*.log
+.mem/
+tools/mem/.venv/
+tools/mem/.fastembed/
+__pycache__/

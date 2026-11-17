@@ -1,0 +1,16 @@
+- insert:
+    # ① MCP 工具：给 AI 读写记忆的通道
+    # 路径占位符会在插件启动时由 bootstrap.js 按本机实际位置替换，不要写死绝对路径
+    - id: long-memory-mcp
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: mem
+        transport: stdio
+        command: __LM_PY__
+        args:
+          - __LM_MCP_SERVER__
+        cwd: __LM_WS__
+        failOnStartupError: false
+    # ② 面板 + 自动召回/写回（同一个模块里 apply 两种能力）
+    - id: long-memory
+      name: '@local/dsh-the-eternal-memory'

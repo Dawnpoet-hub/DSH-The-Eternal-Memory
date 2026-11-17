@@ -1,0 +1,9 @@
+#!/bin/sh
+# mem —— 用工作区 venv 运行，模型与 HF 缓存都放在工作区内（沙箱只允许写这里）
+DIR=$(cd "$(dirname "$0")" && pwd)
+export HF_HOME="$DIR/.hf"
+export HUGGINGFACE_HUB_CACHE="$DIR/.hf/hub"
+export FASTEMBED_CACHE_PATH="$DIR/.fastembed"
+export XDG_CACHE_HOME="$DIR/.cache"
+export TMPDIR="${TMPDIR:-/tmp}"
+exec "$DIR/.venv/bin/python" "$DIR/mem.py" "$@"

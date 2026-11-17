@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "DSH-The-Eternal-Memory",
+    "description": "A long-term memory that belongs to you, stored as plain Markdown on this machine. The sidebar panel shows how much is remembered, lets you search in plain words and open the originals. Relevant memories are recalled automatically before every message, each exchange is distilled into facts afterwards, topic pages are rebuilt every 10 turns, and a reflect tool reasons over the whole store to explain why something behaves as it does. Move machines with a one-click zip export and import. Retrieval runs locally at no cost; only distillation and reasoning use your signed-in DeepSeek account."
+  }
+}

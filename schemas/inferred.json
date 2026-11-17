@@ -1,0 +1,137 @@
+{
+  "generated_at": "2026-11-17 11:57:40",
+  "notes": 9,
+  "types": {
+    "decision": {
+      "count": 4,
+      "fields": [
+        "project",
+        "title",
+        "type"
+      ],
+      "field_ratio": {
+        "title": 1.0,
+        "type": 1.0,
+        "project": 1.0,
+        "tags": 0.75,
+        "created": 0.25,
+        "permalink": 0.25
+      },
+      "observation_categories": [
+        "决定",
+        "原因",
+        "约束"
+      ],
+      "category_ratio": {
+        "决定": 2.25,
+        "约束": 1.75,
+        "原因": 1.0,
+        "更正": 0.5,
+        "权衡": 0.25,
+        "环境": 0.25,
+        "证据": 0.25,
+        "事实": 0.25
+      },
+      "relation_types": {
+        "relates_to": 2
+      },
+      "common_tags": [
+        "doorbell",
+        "ui",
+        "auto",
+        "wifi",
+        "correction"
+      ]
+    },
+    "environment": {
+      "count": 3,
+      "fields": [
+        "project",
+        "tags",
+        "title",
+        "type"
+      ],
+      "field_ratio": {
+        "title": 1.0,
+        "type": 1.0,
+        "tags": 1.0,
+        "permalink": 0.67,
+        "project": 0.33
+      },
+      "observation_categories": [
+        "教训",
+        "约束",
+        "配置"
+      ],
+      "category_ratio": {
+        "约束": 1.33,
+        "教训": 1.0,
+        "配置": 1.0,
+        "规则": 0.33,
+        "原因": 0.33,
+        "事实": 0.33,
+        "坑": 0.33,
+        "做法": 0.33,
+        "证据": 0.33,
+        "限制": 0.33,
+        "模式": 0.33,
+        "加载": 0.33,
+        "页面": 0.33,
+        "成本": 0.33,
+        "备份": 0.33,
+        "路径": 0.33,
+        "端口": 0.33,
+        "入口": 0.33,
+        "前提": 0.33,
+        "经验": 0.33
+      },
+      "relation_types": {
+        "relates_to": 4
+      },
+      "common_tags": [
+        "memory",
+        "tooling",
+        "dsh",
+        "hindsight",
+        "cost",
+        "mastergo",
+        "mcp"
+      ]
+    },
+    "principles": {
+      "count": 2,
+      "fields": [
+        "project",
+        "tags",
+        "title",
+        "type"
+      ],
+      "field_ratio": {
+        "title": 1.0,
+        "type": 1.0,
+        "project": 1.0,
+        "tags": 1.0,
+        "created": 0.5
+      },
+      "observation_categories": [
+        "原则",
+        "规则"
+      ],
+      "category_ratio": {
+        "规则": 2.5,
+        "原则": 1.0,
+        "事实": 0.5,
+        "原因": 0.5,
+        "格式": 0.5
+      },
+      "relation_types": {
+        "relates_to": 1
+      },
+      "common_tags": [
+        "auto",
+        "principle",
+        "collaboration"
+      ]
+    }
+  }
+}

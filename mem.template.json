@@ -1,0 +1,20 @@
+{
+  "roots": [
+    {
+      "name": "main",
+      "title": "default-workspace",
+      "path": "memory",
+      "workspace": "."
+    }
+  ],
+  "embed": {
+    "provider": "fastembed",
+    "model": "BAAI/bge-small-zh-v1.5"
+  },
+  "syncedAt": "2026-11-17 14:28:09",
+  "rerank": {
+    "enabled": true,
+    "model": "BAAI/bge-reranker-v2-m3-int8",
+    "top": 8
+  }
+}
