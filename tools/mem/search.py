@@ -126,7 +126,7 @@ def _resolve(db, name):
     return None
 
 
-def _graph(db, seeds, limit):
+def _graph(db, seeds, limit, project=None):
     """图谱一路：沿两类关系各跳一跳。
 
     1) 手写的 [[链接]]（笔记级，长期结构）
@@ -159,7 +159,7 @@ def _graph(db, seeds, limit):
         if start_oid is None:
             continue
         for a, b, etype, weight in db.execute(
-            "SELECT a,b,etype,weight FROM edges WHERE a=? OR b=? ORDER BY weight DESC LIMIT 8",
+            "SELECT a,b,etype,weight FROM edges WHERE (a=? OR b=?)" + (" AND project=?" if project else "") + " ORDER BY weight DESC LIMIT 8",
             (start_oid, start_oid),
         ):
             other = b if a == start_oid else a
@@ -193,7 +193,7 @@ def search(q, limit=8, use_graph=True, since=None, until=None, recency=0.0, proj
         lists = {"lex": keep(_lex(db, q, limit * 3)),
                  "vec": keep(_vec(db, q, limit))}
         if use_graph:
-            lists["graph"] = keep(_graph(db, lists["lex"] + lists["vec"], limit))
+            lists["graph"] = keep(_graph(db, lists["lex"] + lists["vec"], limit, project=project))
         # 加权 RRF：每一路内部先去重；语义权重最高，图谱只做扩展
         WEIGHTS = {"lex": 1.0, "vec": 1.2, "graph": 0.2}
         score, vsim = defaultdict(float), {}

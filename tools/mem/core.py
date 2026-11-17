@@ -356,9 +356,10 @@ CREATE TABLE meta(k TEXT PRIMARY KEY, v TEXT);
 CREATE TABLE entities(id INTEGER PRIMARY KEY, norm TEXT UNIQUE, name TEXT, kind TEXT,
                       first_seen REAL, seen INT DEFAULT 1);
 CREATE TABLE fact_entity(fact_id INT, entity_id INT, PRIMARY KEY(fact_id, entity_id));
-CREATE TABLE edges(id INTEGER PRIMARY KEY, a INT, b INT, etype TEXT, weight REAL,
+CREATE TABLE edges(id INTEGER PRIMARY KEY, a INT, b INT, etype TEXT, weight REAL, project TEXT DEFAULT 'main',
                    computed_at REAL, UNIQUE(a,b,etype));
 CREATE INDEX idx_edges_a ON edges(a);
+CREATE INDEX idx_edges_project ON edges(project);
 CREATE INDEX idx_edges_b ON edges(b);
 CREATE INDEX idx_fact_entity_e ON fact_entity(entity_id);
 CREATE VIRTUAL TABLE notes_fts USING fts5(title, body, content='notes',

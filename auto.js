@@ -562,13 +562,13 @@ function pageFile(label, root = MEM) {
   return path.join(root, 'pages', `${slug}.md`)
 }
 
-async function rebuildPages(ctx, llm, root = MEM) {
+async function rebuildPages(ctx, llm, root = MEM, project = null) {
   const today = new Date().toISOString().slice(0, 10)
   let rebuilt = 0
   for (const page of PAGE_TAXONOMY) {
     let hits = []
     try {
-      const raw = await ask({ op: 'search', q: page.query, n: 24 })
+      const raw = await ask({ op: 'search', q: page.query, n: 24, ...(project ? { project } : {}) })
       hits = JSON.parse(raw ?? '{}').hits ?? []
     } catch (e) {
       note({ ev: 'page_search_fail', label: page.name, err: String(e).slice(0, 120) })
@@ -1071,7 +1071,7 @@ async function run(ctx, agent, id, force = false) {
     saveState(state)
 
     if (PAGE_EVERY > 0 && turnsCount % PAGE_EVERY === 0) {
-      rebuildPages(ctx, llm, info.root).catch((e) => note({ ev: 'page_fail', err: String(e) }))
+      rebuildPages(ctx, llm, info.root, info.project).catch((e) => note({ ev: 'page_fail', err: String(e) }))
     }
     note({ ev: 'distill', ms: Date.now() - t0, project: info.project,
            provider: modelPick?.provider, model: modelPick?.model,
@@ -1199,7 +1199,8 @@ export function apply(ctx) {
     if (pendingPageRebuild) {
       pendingPageRebuild = false
       const llm = ctx.get ? ctx.get('llm') : undefined
-      rebuildPages(ctx, llm, MEM)
+      projectInfo(agent)
+        .then((info) => rebuildPages(ctx, llm, info.root, info.project))
         .then((n) => note({ ev: 'page_rebuilt', count: n }))
         .catch((e) => note({ ev: 'page_fail', err: String(e).slice(0, 200) }))
     }

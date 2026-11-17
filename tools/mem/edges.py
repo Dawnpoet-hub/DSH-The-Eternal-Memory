@@ -187,6 +187,22 @@ def build(db, verbose=True):
         db.commit()
         stats["total"] = MAX_EDGES
 
+
+    # 按项目隔离：给每条边打上所属项目，并删掉跨项目的边
+    db.execute("""
+        UPDATE edges SET project = COALESCE((
+            SELECT n.project FROM obs o JOIN notes n ON n.id = o.note_id WHERE o.id = edges.a
+        ), 'main')
+    """)
+    db.execute("""
+        DELETE FROM edges WHERE id IN (
+            SELECT e2.id FROM edges e2
+            JOIN obs oa ON oa.id = e2.a JOIN notes na ON na.id = oa.note_id
+            JOIN obs ob ON ob.id = e2.b JOIN notes nb ON nb.id = ob.note_id
+            WHERE na.project IS NOT nb.project
+        )
+    """)
+    db.commit()
     db.execute("INSERT OR REPLACE INTO meta(k,v) VALUES('edges_built_at',?)", (str(now),))
     db.commit()
     if verbose:
