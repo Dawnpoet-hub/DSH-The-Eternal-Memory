@@ -11,10 +11,12 @@ import math
 import re
 import sqlite3
 import time
+import os
 from pathlib import Path
 
 WS = Path(__file__).resolve().parents[2]
 DB_PATH = WS / ".mem" / "index.db"
+_DB_OVERRIDE = None   # 重建时指向临时库，建完再原子替换
 CONFIG = WS / "mem.json"
 
 OBS_RE = re.compile(r"^\s*-\s*\[([^\]]+)\]\s+(.+?)\s*$")
@@ -302,8 +304,9 @@ CREATE VIRTUAL TABLE obs_fts USING fts5(text, category, tags, context,
 
 
 def connect():
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    db = sqlite3.connect(DB_PATH)
+    target = _DB_OVERRIDE or DB_PATH
+    Path(target).parent.mkdir(parents=True, exist_ok=True)
+    db = sqlite3.connect(target)
     db.execute("PRAGMA journal_mode=WAL")
     return db
 
@@ -315,9 +318,33 @@ def _pack(vec):
 
 
 def build(verbose=True, rebuild=True, edges_enabled=True):
-    """索引或增量更新。rebuild=False 时按 hash 跳过未变文件。"""
-    if rebuild and DB_PATH.exists():
-        DB_PATH.unlink()
+    """索引或增量更新。rebuild=False 时按 hash 跳过未变文件。
+
+    rebuild=True 时先建到临时库、成功后原子替换，避免重建期间读者看到「no such table」。
+    同时用文件锁阻止并发重建。
+    """
+    global _DB_OVERRIDE
+
+    if rebuild:
+        lock = DB_PATH.with_suffix(".lock")
+        try:
+            fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.write(fd, str(os.getpid()).encode())
+            os.close(fd)
+        except FileExistsError:
+            # 已有重建在进行：本次直接跳过，避免两个进程互相踩
+            if verbose:
+                print("另一个重建正在进行，跳过本次")
+            return {"new": 0, "skip": 0, "notes": 0, "obs": 0, "rel": 0, "busy": True}
+        tmp = DB_PATH.with_suffix(".db.build")
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                Path(str(tmp) + suffix).unlink()
+            except FileNotFoundError:
+                pass
+        _DB_OVERRIDE = str(tmp)
+    else:
+        lock = None
     db = connect()
     if rebuild:
         db.executescript(SCHEMA)
@@ -434,6 +461,22 @@ def build(verbose=True, rebuild=True, edges_enabled=True):
 
     stats["notes"] = db.execute("SELECT count(*) FROM notes").fetchone()[0]
     db.close()
+
+    if rebuild:
+        # 临时库建好后原子替换，读者要么看到旧库、要么看到新库，不会看到半成品
+        try:
+            for suffix in ("-wal", "-shm"):
+                try:
+                    Path(str(tmp) + suffix).unlink()
+                except FileNotFoundError:
+                    pass
+            os.replace(str(tmp), str(DB_PATH))
+        finally:
+            _DB_OVERRIDE = None
+            try:
+                lock.unlink()
+            except FileNotFoundError:
+                pass
     if violations:
         print(f"⚠ schema 校验：{len(violations)} 处不合规")
         for path, prob in violations[:8]:
