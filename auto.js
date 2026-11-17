@@ -526,7 +526,17 @@ const PAGE_PROMPT = `你在维护一份「项目页面」：把这个主题**现
 ## 曾经考虑过
 （被否决或已过时的方案，每条一句；没有就写"暂无"）`
 
-/** 从 memory/*.md 里按 page 标签聚合事实 */
+// 与 Hindsight 对齐：页面不是聚类出来的，而是一份固定清单，
+// 每页由一个「检索问题」驱动 —— 先用这个问题去记忆库找材料，再让模型写成页面。
+const PAGE_TAXONOMY = [
+  { name: '组件地图', query: '这个项目有哪些主要模块、组件或子系统，各自负责什么，彼此怎么关联或依赖？' },
+  { name: '核心理念', query: '这个项目的核心概念、领域术语和关键实体是什么，各自代表什么？' },
+  { name: '约定与模式', query: '这个项目遵循哪些约定、习惯和固定做法（结构、命名、错误处理、测试方式）？' },
+  { name: '关键决定与理由', query: '这个项目做过哪些重要决定，理由是什么，为什么不是另一种做法？' },
+  { name: '功能与改进', query: '这个项目做了哪些主要功能、改进和迭代，随时间有什么变化？' },
+]
+
+/** 旧版：按标题聚类（已不再使用，保留供参考） */
 function collectPages(root = MEM) {
   const pages = new Map()
   let files = []
@@ -553,64 +563,54 @@ function pageFile(label, root = MEM) {
 }
 
 async function rebuildPages(ctx, llm, root = MEM) {
-  const pages = collectPages(root)
   const today = new Date().toISOString().slice(0, 10)
   let rebuilt = 0
-  for (const [label, facts] of pages) {
-    if (facts.length < PAGE_MIN_FACTS) continue
-    const user = [`主题：${label}`, '', '事实清单：']
-      .concat(facts.map((x) => `- [${x.cat}] ${x.text}（来源：${x.source}）`))
+  for (const page of PAGE_TAXONOMY) {
+    let hits = []
+    try {
+      const raw = await ask({ op: 'search', q: page.query, n: 24 })
+      hits = JSON.parse(raw ?? '{}').hits ?? []
+    } catch (e) {
+      note({ ev: 'page_search_fail', label: page.name, err: String(e).slice(0, 120) })
+      continue
+    }
+    const facts = hits.filter((h) => h.kind === 'obs').slice(0, 24)
+    if (facts.length < PAGE_MIN_FACTS) {
+      note({ ev: 'page_skip', label: page.name, n: facts.length })
+      continue
+    }
+    const user = [`主题：${page.name}`, '', '材料：']
+      .concat(facts.map((f) => `- [${f.cat ?? '事实'}] ${f.text}（来源：${f.title ?? f.path}）`))
       .join('\n')
     try {
       const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('page timeout')), DISTILL_TIMEOUT))
-      const res = await Promise.race([
-        callModelAuto(ctx, llm, PAGE_PROMPT, user),
-        timeout,
-      ])
+      const res = await Promise.race([callModelAuto(ctx, llm, PAGE_PROMPT, user), timeout])
       const md = String(res.text).trim()
-      if (md.length < 60) { note({ ev: 'page_empty', label }); continue }
+      if (md.length < 60) { note({ ev: 'page_empty', label: page.name }); continue }
       fs.mkdirSync(path.join(root, 'pages'), { recursive: true })
-      fs.writeFileSync(pageFile(label, root), [
+      fs.writeFileSync(pageFile(page.name, root), [
         '---',
-        `title: ${label}`,
+        `title: ${page.name}`,
         'type: page',
         'project: main',
         'tags: [page]',
         `created: ${today}`,
+        `source_query: ${JSON.stringify(page.query)}`,
         '---',
         '',
-        `# ${label}`,
+        `# ${page.name}`,
         '',
         md,
         '',
-        `<!-- 由 ${facts.length} 条事实重建于 ${today} -->`,
-        '',
-      ].join('\n'), 'utf8')
-      rebuilt++
-      note({ ev: 'page', label, facts: facts.length, chars: md.length })
+      ].join('\n'))
+      rebuilt += 1
+      note({ ev: 'page_ok', label: page.name, facts: facts.length })
     } catch (e) {
-      note({ ev: 'page_error', label, err: String(e) })
+      note({ ev: 'page_error', label: page.name, err: String(e).slice(0, 160) })
     }
-  }
-  if (rebuilt) {
-    try { spawn(pyNow(), [CLI, 'index', '--update'], { cwd: WS, stdio: 'ignore' }).on('error', () => {}).unref() } catch { /* ignore */ }
   }
   return rebuilt
 }
-
-
-// ---------------- 深推理（对齐 Hindsight 的 reflect） ----------------
-
-const REFLECT_PROMPT = `你是调试助手，手上是这个项目过去的决定与约束（后面是证据）。
-
-给定一个现象或问题，你要找出**哪一条历史决定的理由能够解释它的根因**，而不是仅仅字面上沾边的那条。
-
-输出要求：
-1. 直接给结论：哪条决定导致了这个问题，**把当时的精确规则和字面值原样抄出来**（数值、颜色、路径、文件名、命令、接口名）。不许改写、不许概括成"项目的标准做法"。
-2. 如果记忆里同一个规则有冲突的记录，**以最新的为准**，并明确说旧规则已失效。
-3. 每条结论后面用 (来源: <REF-ID 或笔记名>) 标注。
-4. 如果没有任何证据能真正解释这个现象，就只输出一句话：**记忆里没有能解释这个问题的记录**。不要勉强凑一个最接近的答案——错误的自信比诚实的缺失更糟。
-5. 全文不超过 400 字，用中文，不要客套话。`
 
 function listPageBodies(root = MEM) {
   try {
