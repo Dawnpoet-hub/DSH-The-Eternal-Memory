@@ -1055,7 +1055,24 @@ window.__ModuleLoader__.load({
 
       if (!m) return null
 
+      const progressButton = (pct) => h('div', {
+        style: {
+          position: 'relative', overflow: 'hidden', minWidth: 96, textAlign: 'center',
+          border: '1px solid color-mix(in srgb, currentColor 20%, transparent)',
+          borderRadius: 8, padding: '6px 12px', fontSize: 11.5,
+        },
+      },
+        h('div', {
+          style: {
+            position: 'absolute', left: 0, top: 0, bottom: 0, width: `${pct}%`,
+            background: 'color-mix(in srgb, #5B8FF9 45%, transparent)',
+            transition: 'width .6s ease-out',
+          },
+        }),
+        h('span', { style: { position: 'relative' } }, `${pct}%`))
+
       const embedRows = (m.embed?.options ?? []).map((o) => {
+        const dl = m.downloads?.[o.id]
         const action = o.downloaded
           ? (o.active
             ? h('span', { style: { ...S.statSub } }, t('modelActive'))
@@ -1063,10 +1080,12 @@ window.__ModuleLoader__.load({
                 style: { ...S.btn, fontSize: 11.5 },
                 onClick: () => post({ action: 'setEmbed', model: o.id }),
               }, t('modelUse')))
-          : h('button', {
-              style: { ...S.btn, fontSize: 11.5 },
-              onClick: () => post({ action: 'download', kind: 'embed', model: o.id }),
-            }, t('modelDownload'))
+          : (dl
+            ? progressButton(dl.progress)
+            : h('button', {
+                style: { ...S.btn, fontSize: 11.5 },
+                onClick: () => post({ action: 'download', kind: 'embed', model: o.id }),
+              }, t('modelDownload')))
 
         return h('div', {
           key: o.id,
@@ -1080,15 +1099,18 @@ window.__ModuleLoader__.load({
       })
 
       const rerank = m.rerank ?? {}
+      const rerankDl = m.downloads?.[rerank.current]
       const rerankAction = rerank.downloaded
         ? h('button', {
             style: { ...S.btn, fontSize: 11.5 },
             onClick: () => post({ action: 'setRerank', enabled: !rerank.enabled }),
           }, rerank.enabled ? t('modelTurnOff') : t('modelTurnOn'))
-        : h('button', {
-            style: { ...S.btnPrimary, fontSize: 11.5 },
-            onClick: () => post({ action: 'download', kind: 'rerank', model: rerank.current }),
-          }, t('modelDownloadRerank'))
+        : (rerankDl
+          ? progressButton(rerankDl.progress)
+          : h('button', {
+              style: { ...S.btnPrimary, fontSize: 11.5 },
+              onClick: () => post({ action: 'download', kind: 'rerank', model: rerank.current }),
+            }, t('modelDownloadRerank')))
 
       return h('div', { style: S.modalWrap, onClick: onClose },
         h('div', { style: S.modal, onClick: (e) => e.stopPropagation() },

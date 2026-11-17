@@ -1,7 +1,7 @@
 // Host 侧：给「长期记忆」面板提供本地 HTTP 接口。
 // 数据不另存一份，全部来自 tools/mem 的 Python 命令行与 memory/ 里的 Markdown。
 import { execFile, spawn, spawnSync } from 'node:child_process'
-import { existsSync, readFileSync, writeFileSync, appendFileSync, readdirSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync, appendFileSync, readdirSync, statSync } from 'node:fs'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -590,16 +590,51 @@ function runSetupTask(kind) {
 
 // ---------------- 模型管理：随时可切换 ----------------
 
+const DOWNLOADS = new Map()   // model -> { startedAt, expectedGB }
+
+function dirSize(dir) {
+  let total = 0
+  const stack = [dir]
+  while (stack.length) {
+    const cur = stack.pop()
+    let entries = []
+    try { entries = readdirSync(cur, { withFileTypes: true }) } catch { continue }
+    for (const e of entries) {
+      const full = path.join(cur, e.name)
+      if (e.isDirectory()) stack.push(full)
+      else { try { total += statSync(full).size } catch { /* ignore */ } }
+    }
+  }
+  return total
+}
+
+function modelDir(model) {
+  return path.join(TOOLS, '.fastembed', `models--${model.replace('/', '--')}`)
+}
+
+function downloadProgress() {
+  const out = {}
+  for (const [model, info] of DOWNLOADS) {
+    let bytes = 0
+    try { bytes = dirSize(modelDir(model)) } catch { bytes = 0 }
+    const expected = Math.max(1, info.expectedGB * 1024 ** 3)
+    const pct = Math.min(99, Math.round((bytes / expected) * 100))
+    if (bytes > 0 && pct >= 99) continue
+    out[model] = { progress: Math.max(1, pct), bytes, expected }
+  }
+  return out
+}
+
 const MODEL_CATALOG = {
   // 只保留 3 档：fastembed 支持 41 个向量模型，其中中文可用的有 7 个，
   // 其余几档（mpnet / MiniLM / potion / jina-v3）要么更弱、要么未实测，不放进界面
   embed: [
-    { id: 'BAAI/bge-small-zh-v1.5', label: '中文·轻量（默认）', size: '约 90MB · 512维', note: '中文短句够用；速度最快、占用最小，日常首选' },
-    { id: 'jinaai/jina-embeddings-v2-base-zh', label: '中文·增强', size: '约 640MB · 768维', note: '中文专用长文本模型，语义更细腻，检索更准' },
-    { id: 'intfloat/multilingual-e5-large', label: '多语言·最强', size: '约 2.2GB · 1024维', note: '检索专用、精度最高；建索引慢、占内存多' },
+    { id: 'BAAI/bge-small-zh-v1.5', gb: 0.09, label: '中文·轻量（默认）', size: '约 90MB · 512维', note: '中文短句够用；速度最快、占用最小，日常首选' },
+    { id: 'jinaai/jina-embeddings-v2-base-zh', gb: 0.64, label: '中文·增强', size: '约 640MB · 768维', note: '中文专用长文本模型，语义更细腻，检索更准' },
+    { id: 'intfloat/multilingual-e5-large', gb: 2.24, label: '多语言·最强', size: '约 2.2GB · 1024维', note: '检索专用、精度最高；建索引慢、占内存多' },
   ],
   rerank: [
-    { id: 'BAAI/bge-reranker-v2-m3-int8', label: '精确重排', size: '约 560MB', note: '对候选逐条精算相关性，明显减少「擦边」结果' },
+    { id: 'BAAI/bge-reranker-v2-m3-int8', gb: 0.57, label: '精确重排', size: '约 560MB', note: '对候选逐条精算相关性，明显减少「擦边」结果' },
   ],
 }
 
@@ -643,6 +678,7 @@ function modelStatus() {
       downloaded: modelCacheHas(embedCur),
       options: MODEL_CATALOG.embed.map((m) => ({ ...m, active: m.id === embedCur, downloaded: modelCacheHas(m.id) })),
     },
+    downloads: downloadProgress(),
     rerank: {
       enabled: cfg.rerank?.enabled === true,
       current: rerankCur,
@@ -657,6 +693,8 @@ function pyBin() {
 }
 
 function downloadModel(model, kind) {
+  const known = [...MODEL_CATALOG.embed, ...MODEL_CATALOG.rerank].find((m) => m.id === model)
+  DOWNLOADS.set(model, { startedAt: Date.now(), expectedGB: known?.gb ?? 0.6 })
   const cache = path.join(TOOLS, '.fastembed')
   const py = pyBin()
   const script = kind === 'rerank'
