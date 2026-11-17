@@ -1,7 +1,7 @@
 // Host 侧：给「长期记忆」面板提供本地 HTTP 接口。
 // 数据不另存一份，全部来自 tools/mem 的 Python 命令行与 memory/ 里的 Markdown。
 import { execFile, spawn, spawnSync } from 'node:child_process'
-import { existsSync, readFileSync, appendFileSync, readdirSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync, appendFileSync, readdirSync } from 'node:fs'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -587,6 +587,105 @@ function runSetupTask(kind) {
   return { ok: false, error: '未知任务' }
 }
 
+
+// ---------------- 模型管理：随时可切换 ----------------
+
+const MODEL_CATALOG = {
+  embed: [
+    { id: 'BAAI/bge-small-zh-v1.5', label: '轻量（默认）', size: '约 90MB', note: '中文短句效果好，速度最快' },
+    { id: 'BAAI/bge-large-zh-v1.5', label: '更准（更大）', size: '约 1.3GB', note: '同一条记忆的语义更细腻，检索更准，但更慢更占内存' },
+  ],
+  rerank: [
+    { id: 'BAAI/bge-reranker-v2-m3-int8', label: '精确重排', size: '约 560MB', note: '对候选逐条精算相关性，明显减少「擦边」结果' },
+  ],
+}
+
+function readMemCfg() {
+  try { return JSON.parse(readFileSync(path.join(WS, 'mem.json'), 'utf8')) } catch { return {} }
+}
+
+function writeMemCfg(cfg) {
+  writeFileSync(path.join(WS, 'mem.json'), JSON.stringify(cfg, null, 2) + '\n')
+}
+
+function modelCacheHas(model) {
+  try {
+    const dir = path.join(TOOLS, '.fastembed')
+    if (!existsSync(dir)) return false
+    const needle = model.split('/').pop().toLowerCase().replace(/[^a-z0-9]/g, '')
+    const stack = [dir]
+    while (stack.length) {
+      const cur = stack.pop()
+      let entries = []
+      try { entries = readdirSync(cur, { withFileTypes: true }) } catch { continue }
+      for (const e of entries) {
+        const full = path.join(cur, e.name)
+        if (e.isDirectory()) {
+          if (e.name.toLowerCase().replace(/[^a-z0-9]/g, '').includes(needle.slice(0, 10))) return true
+          stack.push(full)
+        }
+      }
+    }
+  } catch { /* ignore */ }
+  return false
+}
+
+function modelStatus() {
+  const cfg = readMemCfg()
+  const embedCur = cfg.embed?.model || 'BAAI/bge-small-zh-v1.5'
+  const rerankCur = cfg.rerank?.model || 'BAAI/bge-reranker-v2-m3-int8'
+  return {
+    embed: {
+      current: embedCur,
+      downloaded: modelCacheHas(embedCur),
+      options: MODEL_CATALOG.embed.map((m) => ({ ...m, active: m.id === embedCur, downloaded: modelCacheHas(m.id) })),
+    },
+    rerank: {
+      enabled: cfg.rerank?.enabled === true,
+      current: rerankCur,
+      downloaded: modelCacheHas(rerankCur),
+      options: MODEL_CATALOG.rerank.map((m) => ({ ...m, active: m.id === rerankCur, downloaded: modelCacheHas(m.id) })),
+    },
+  }
+}
+
+function pyBin() {
+  try { const p = pyNow(); return p } catch { return 'python3' }
+}
+
+function downloadModel(model, kind) {
+  const cache = path.join(TOOLS, '.fastembed')
+  const py = pyBin()
+  const script = kind === 'rerank'
+    ? 'from fastembed.rerank.cross_encoder import TextCrossEncoder as C; list(C(\'%s\').rerank("预热", ["记住这件事"]))' % model
+    : 'from fastembed import TextEmbedding; list(TextEmbedding(\'%s\').embed(["预热"]))' % model
+  const child = spawn(py, ['-c', script], {
+    detached: true, stdio: 'ignore', cwd: WS,
+    env: { ...process.env, FASTEMBED_CACHE_PATH: cache },
+  })
+  child.on('error', () => {})
+  child.unref()
+  return { ok: true, background: true }
+}
+
+function switchEmbed(model) {
+  const cfg = readMemCfg()
+  cfg.embed = { ...(cfg.embed || {}), provider: cfg.embed?.provider || 'fastembed', model }
+  writeMemCfg(cfg)
+  // 换模型必须重建向量：整库重跑
+  try {
+    spawn(pyBin(), [CLI, 'index'], { cwd: WS, stdio: 'ignore' }).on('error', () => {}).unref()
+  } catch { /* ignore */ }
+  return { ok: true, reindexing: true, model }
+}
+
+function setRerank(enabled) {
+  const cfg = readMemCfg()
+  cfg.rerank = { enabled: !!enabled, model: cfg.rerank?.model || 'BAAI/bge-reranker-v2-m3-int8', top: cfg.rerank?.top ?? 8 }
+  writeMemCfg(cfg)
+  return { ok: true, enabled: !!enabled }
+}
+
 // ---------- 路由 ----------
 
 function createHandler() {
@@ -600,6 +699,16 @@ function createHandler() {
       const proj = q.get('project')
       const projArgs = proj ? ['--project', proj] : []
 
+      if (req.method === 'GET' && route === 'models') {
+        return send(res, 200, modelStatus())
+      }
+      if (req.method === 'POST' && route === 'models') {
+        const body = await readJsonBody(req)
+        if (body.action === 'download') return send(res, 200, downloadModel(body.model, body.kind))
+        if (body.action === 'setEmbed') return send(res, 200, switchEmbed(body.model))
+        if (body.action === 'setRerank') return send(res, 200, setRerank(body.enabled))
+        return send(res, 400, { ok: false, error: 'unknown action' })
+      }
       if (req.method === 'GET' && route === 'setup') {
         return send(res, 200, setupStatus())
       }

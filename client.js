@@ -154,6 +154,23 @@ window.__ModuleLoader__.load({
         refresh: '刷新',
         refreshHint: '重新读取记忆库和运行状态',
         setupPythonLink: '去下载 Python',
+        modelsTitle: '模型',
+        modelsSub: '现在用的检索模型，可随时切换或开启更准的重排',
+        modelsEmbed: '找记忆用的模型',
+        modelsRerank: '精确重排（可选）',
+        modelUse: '换成这个',
+        modelDownload: '下载',
+        modelActive: '使用中',
+        modelOn: '已开启',
+        modelOff: '已关闭',
+        modelReady: '模型已就绪',
+        modelNotDownloaded: '还没下载',
+        modelTurnOn: '开启',
+        modelTurnOff: '关闭',
+        modelDownloadRerank: '下载重排模型（约 560MB）',
+        modelDownloadRerank: 'Download reranker (~560MB)',
+        modelQueued: '已开始后台处理，完成后会自动刷新',
+        modelSwitching: '正在切换并重建索引，稍等一下',
       },
       en: {
         panel: 'Long-term memory',
@@ -294,6 +311,22 @@ window.__ModuleLoader__.load({
         refreshHint: 'Reload memory store and status',
         setupPythonLink: 'Get Python',
       },
+        modelsTitle: 'Models',
+        modelsSub: 'Which retrieval model is in use; switch or enable reranking any time',
+        modelsEmbed: 'Model used to find memories',
+        modelsRerank: 'Cross-encoder rerank (optional)',
+        modelUse: 'Use this',
+        modelDownload: 'Download',
+        modelActive: 'In use',
+        modelOn: 'On',
+        modelOff: 'Off',
+        modelReady: 'Ready',
+        modelNotDownloaded: 'Not downloaded',
+        modelTurnOn: 'Enable',
+        modelTurnOff: 'Disable',
+        modelDownloadRerank: 'Download reranker (~560MB)',
+        modelQueued: 'Running in the background; this panel refreshes when done',
+        modelSwitching: 'Switching and rebuilding the index, hold on',
     }
 
     // ---------- 样式（跟随宿主主题） ----------
@@ -937,9 +970,11 @@ window.__ModuleLoader__.load({
       const [st, setSt] = useState(null)
       const [msg, setMsg] = useState(null)
 
+      const [mod, setMod] = useState(null)
       useEffect(() => {
         let alive = true
         getJson('/setup').then((d) => { if (alive) setSt(d) }).catch(() => {})
+        getJson('/models').then((d) => { if (alive) setMod(d) }).catch(() => {})
         return () => { alive = false }
       }, [])
 
@@ -975,8 +1010,114 @@ window.__ModuleLoader__.load({
         !st.tools ? h('div', { style: { fontSize: 12 } }, t('setupTools')) : null,
         h('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' } },
           st.python?.ok && !st.deps ? h('button', { style: S.btnPrimary, onClick: () => act('deps') }, t('setupDeps')) : null,
-          st.python?.ok && st.deps && !st.model ? h('button', { style: S.btn, onClick: () => act('model') }, t('setupModel')) : null),
+          st.python?.ok && st.deps && !st.model ? h('button', { style: S.btn, onClick: () => act('model') }, t('setupModel')) : null,
+          st.python?.ok && st.deps && st.model && mod && !mod.rerank?.downloaded
+            ? h('button', {
+                style: { ...S.btn, opacity: 0.85 },
+                onClick: async () => {
+                  await api('/models', {
+                    method: 'POST', headers: { 'content-type': 'application/json' },
+                    body: JSON.stringify({ action: 'download', kind: 'rerank', model: mod.rerank?.current }),
+                  }).catch(() => {})
+                  setMsg(t('setupRunning'))
+                },
+              }, t('modelDownloadRerank'))
+            : null),
         msg ? h('div', { style: { fontSize: 11.5, opacity: 0.7 } }, msg) : null)
+    }
+
+    // 模型：随时切换向量模型与精确重排
+    function ModelPanel({ t }) {
+      const [m, setM] = useState(null)
+      const [msg, setMsg] = useState(null)
+      const [open, setOpen] = useState(false)
+
+      const load = async () => {
+        try { setM(await getJson('/models')) } catch { /* ignore */ }
+      }
+      useEffect(() => {
+        load()
+        const timer = setInterval(load, 20_000)
+        return () => clearInterval(timer)
+      }, [])
+
+      const post = async (body) => {
+        try {
+          const res = await api('/models', {
+            method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(body),
+          })
+          const r = await res.json()
+          setMsg(r.ok ? (r.reindexing ? t('modelSwitching') : t('modelQueued')) : (r.error || '失败'))
+          setTimeout(load, 1500)
+        } catch (e) { setMsg(String(e.message)) }
+      }
+
+      if (!m) return null
+
+      const embedRows = (m.embed?.options ?? []).map((o) => {
+        const action = o.downloaded
+          ? (o.active
+            ? h('span', { style: { ...S.statSub } }, t('modelActive'))
+            : h('button', {
+                style: { ...S.btn, fontSize: 11.5 },
+                onClick: () => post({ action: 'setEmbed', model: o.id }),
+              }, t('modelUse')))
+          : h('button', {
+              style: { ...S.btn, fontSize: 11.5 },
+              onClick: () => post({ action: 'download', kind: 'embed', model: o.id }),
+            }, t('modelDownload'))
+
+        return h('div', {
+          key: o.id,
+          style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' },
+        },
+          h('div', { style: { minWidth: 0 } },
+            h('div', { style: { fontSize: 12.5, fontWeight: o.active ? 600 : 500 } },
+              `${o.active ? '● ' : '○ '}${o.label}　${o.size}`),
+            h('div', { style: { ...S.statSub, marginTop: 2 } }, o.note)),
+          h('div', { style: { display: 'flex', gap: 6, flex: 'none' } }, action))
+      })
+
+      const rerank = m.rerank ?? {}
+      const rerankAction = rerank.downloaded
+        ? h('button', {
+            style: { ...S.btn, fontSize: 11.5 },
+            onClick: () => post({ action: 'setRerank', enabled: !rerank.enabled }),
+          }, rerank.enabled ? t('modelTurnOff') : t('modelTurnOn'))
+        : h('button', {
+            style: { ...S.btnPrimary, fontSize: 11.5 },
+            onClick: () => post({ action: 'download', kind: 'rerank', model: rerank.current }),
+          }, t('modelDownloadRerank'))
+
+      return h('section', { style: S.section },
+        h('button', {
+          onClick: () => setOpen(!open),
+          style: {
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
+            width: '100%', cursor: 'pointer', color: 'inherit', textAlign: 'left',
+            background: 'transparent', border: 'none', padding: 0,
+          },
+        },
+          h('div', { style: { minWidth: 0 } },
+            h('div', { style: S.h2 }, t('modelsTitle')),
+            h('div', { style: S.sub }, t('modelsSub'))),
+          h('span', { style: { fontSize: 11, opacity: 0.6 } }, open ? '▾' : '▸')),
+
+        open ? h('div', { style: { ...S.card, display: 'flex', flexDirection: 'column', gap: 10 } },
+          h('div', null,
+            h('div', { style: S.statLabel }, t('modelsEmbed')),
+            h('div', { style: { display: 'flex', flexDirection: 'column', gap: 8, marginTop: 6 } }, embedRows)),
+
+          h('div', { style: { borderTop: '1px solid color-mix(in srgb, currentColor 10%, transparent)', paddingTop: 10 } },
+            h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' } },
+              h('div', { style: { minWidth: 0 } },
+                h('div', { style: S.statLabel }, t('modelsRerank')),
+                h('div', { style: { ...S.statSub, marginTop: 2 } },
+                  `${rerank.enabled ? t('modelOn') : t('modelOff')} · ${rerank.downloaded ? t('modelReady') : t('modelNotDownloaded')}`)),
+              h('div', { style: { display: 'flex', gap: 6, flex: 'none' } }, rerankAction))),
+
+          msg ? h('div', { style: { ...S.statSub, opacity: 0.75 } }, msg) : null) : null)
     }
 
     // 详细数据：花费、命中率、速度、7 天趋势
