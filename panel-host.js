@@ -666,11 +666,15 @@ function downloadProgress() {
         if (p.state === 'error') { state = 'error'; error = p.error || error }
       }
     } catch { /* ignore */ }
+    // 停滞检测：记录上次字节变化时间
+    const now = Date.now()
+    if (info.lastBytes !== bytes) { info.lastBytes = bytes; info.lastChangeAt = now }
+    const stalledSec = Math.max(0, Math.round((now - (info.lastChangeAt ?? now)) / 1000))
     if (state === 'done') continue
     const expected = total || Math.round((info.expectedGB ?? 0.6) * 1024 ** 3)
     // 保留一位小数，避免低速下载时长时间停在「1%」
     const progress = total > 0 && bytes > 0 ? Math.min(99, Math.round((bytes / total) * 1000) / 10) : 0
-    out[model] = { progress, bytes, expected, status: state, error }
+    out[model] = { progress, bytes, expected, status: state, error, stalledSec }
   }
   return out
 }

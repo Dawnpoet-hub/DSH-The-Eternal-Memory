@@ -151,6 +151,8 @@ window.__ModuleLoader__.load({
         modelLoading: '正在读取模型信息…',
         modelLoadFail: '读取模型信息失败',
 
+        modelStalled: '已卡住 {n} 秒',
+
       },
       en: {
         panel: 'Long-term memory',
@@ -285,6 +287,8 @@ window.__ModuleLoader__.load({
 
         modelLoading: 'Loading model info…',
         modelLoadFail: 'Could not load model info',
+
+        modelStalled: 'stalled {n}s',
 
     }
 
@@ -1027,7 +1031,7 @@ window.__ModuleLoader__.load({
               err ? `${t('modelLoadFail')}：${err}` : t('modelLoading'))))
       }
 
-      const progressButton = (pct, bytes) => h('div', {
+      const progressButton = (pct, bytes, stalled) => h('div', {
         style: {
           position: 'relative', overflow: 'hidden', width: 104, boxSizing: 'border-box', textAlign: 'center',
           border: '1px solid color-mix(in srgb, currentColor 20%, transparent)',
@@ -1043,8 +1047,10 @@ window.__ModuleLoader__.load({
         }),
         h('span', { style: { position: 'relative', fontSize: 11 } },
           pct <= 0 ? t('modelPreparing')
-            : pct < 3 ? `${Math.max(1, Math.round(pct))}% · ${((bytes || 0) / 1048576).toFixed(0)}MB`
-              : `${Math.round(pct)}%`))
+            : (stalled && stalled > 30)
+              ? `${((bytes || 0) / 1048576).toFixed(0)}MB · ${t('modelStalled', { n: stalled })}`
+              : pct < 3 ? `${Math.max(1, Math.round(pct))}% · ${((bytes || 0) / 1048576).toFixed(0)}MB`
+                : `${Math.round(pct)}%`))
 
       const embedRows = (m.embed?.options ?? []).map((o) => {
         const dl = m.downloads?.[o.id]
@@ -1068,7 +1074,7 @@ window.__ModuleLoader__.load({
                   title: dl.tail || '',
                   onClick: () => post({ action: 'download', kind: 'embed', model: o.id }),
                 }, t('modelFailed'))
-              : progressButton(dl.progress, dl.bytes))
+              : progressButton(dl.progress, dl.bytes, dl.stalledSec))
             : h('button', {
                 style: { ...S.btn, fontSize: 11.5, width: 104, boxSizing: 'border-box', justifyContent: 'center' },
                 onClick: () => post({ action: 'download', kind: 'embed', model: o.id }),
@@ -1099,7 +1105,7 @@ window.__ModuleLoader__.load({
                 title: rerankDl.tail || '',
                 onClick: () => post({ action: 'download', kind: 'rerank', model: rerank.current }),
               }, t('modelFailed'))
-            : progressButton(rerankDl.progress, rerankDl.bytes))
+            : progressButton(rerankDl.progress, rerankDl.bytes, rerankDl.stalledSec))
           : h('button', {
               style: { ...S.btnPrimary, fontSize: 11.5, width: 104, boxSizing: 'border-box', justifyContent: 'center' },
               onClick: () => post({ action: 'download', kind: 'rerank', model: rerank.current }),
