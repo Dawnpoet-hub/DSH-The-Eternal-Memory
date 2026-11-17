@@ -6,10 +6,12 @@
 
 ## 安装前需要准备
 
+> **Python 不用自己装**：DSH 桌面版运行时自带 Python 3.12，插件会优先使用它。
+
 | 项目 | 要求 | 说明 |
 |---|---|---|
 | DSH 桌面版 | 已安装并能正常打开 | 插件通过 profile 的 bundle 机制加载 |
-| **Python** | 通常**不用管** | 插件会优先用 **DSH 自带运行时里的 Python 3.12**；找不到才需要自己装 3.11+ |
+| **Python** | **不用自己装** | DSH 桌面版运行时**自带 Python 3.12**（`~/.dsh/dsh-runtimes/*/dependencies/python`），插件会直接用它建虚拟环境。只有在找不到时才需要自己装 3.11+ |
 | 磁盘 | 约 300MB | 依赖 80MB + 向量模型 90MB + 你的记忆 |
 | 网络 | 首次需要联网 | 只有第一次要下载，之后完全离线 |
 
@@ -89,7 +91,12 @@ git add -A && git commit  # 此时若有本机路径会被拒绝
 ## 常见问题
 
 **引导条一直显示「需要先安装 Python」**
-装好 Python 后重启 DSH；若已装仍提示，确认终端里 `python3 --version` 能出版本。
+
+正常情况下不该出现——DSH 运行时自带 Python。如果出现：
+
+1. 确认 DSH 安装完整（`~/.dsh/dsh-runtimes/` 下应有一个运行时目录，里面有 `dependencies/python`）
+2. 若确实没有，自己装 Python 3.11+ 后重启 DSH
+3. 想指定某个解释器，可设环境变量 `LONG_MEMORY_PYTHON=/path/to/python`
 
 **点了「安装依赖」没反应**
 安装是后台任务，约 1–3 分钟。看 `.mem/setup.log`，或重开面板看引导条是否消失。
