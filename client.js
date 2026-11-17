@@ -1063,7 +1063,7 @@ window.__ModuleLoader__.load({
 
       const progressButton = (pct) => h('div', {
         style: {
-          position: 'relative', overflow: 'hidden', minWidth: 96, textAlign: 'center',
+          position: 'relative', overflow: 'hidden', width: 104, boxSizing: 'border-box', textAlign: 'center',
           border: '1px solid color-mix(in srgb, currentColor 20%, transparent)',
           borderRadius: 8, padding: '6px 12px', fontSize: 11.5,
         },
@@ -1083,13 +1083,13 @@ window.__ModuleLoader__.load({
           ? (o.active
             ? h('span', { style: { ...S.statSub } }, t('modelActive'))
             : h('button', {
-                style: { ...S.btn, fontSize: 11.5 },
+                style: { ...S.btn, fontSize: 11.5, width: 104, boxSizing: 'border-box', justifyContent: 'center' },
                 onClick: () => post({ action: 'setEmbed', model: o.id }),
               }, t('modelUse')))
           : (dl
             ? progressButton(dl.progress)
             : h('button', {
-                style: { ...S.btn, fontSize: 11.5 },
+                style: { ...S.btn, fontSize: 11.5, width: 104, boxSizing: 'border-box', justifyContent: 'center' },
                 onClick: () => post({ action: 'download', kind: 'embed', model: o.id }),
               }, t('modelDownload')))
 
@@ -1108,13 +1108,13 @@ window.__ModuleLoader__.load({
       const rerankDl = m.downloads?.[rerank.current]
       const rerankAction = rerank.downloaded
         ? h('button', {
-            style: { ...S.btn, fontSize: 11.5 },
+            style: { ...S.btn, fontSize: 11.5, width: 104, boxSizing: 'border-box', justifyContent: 'center' },
             onClick: () => post({ action: 'setRerank', enabled: !rerank.enabled }),
           }, rerank.enabled ? t('modelTurnOff') : t('modelTurnOn'))
         : (rerankDl
           ? progressButton(rerankDl.progress)
           : h('button', {
-              style: { ...S.btnPrimary, fontSize: 11.5 },
+              style: { ...S.btnPrimary, fontSize: 11.5, width: 104, boxSizing: 'border-box', justifyContent: 'center' },
               onClick: () => post({ action: 'download', kind: 'rerank', model: rerank.current }),
             }, t('modelDownloadRerank')))
 
