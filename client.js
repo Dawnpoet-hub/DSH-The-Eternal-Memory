@@ -153,6 +153,9 @@ window.__ModuleLoader__.load({
 
         modelStalled: '已卡住 {n} 秒',
 
+        pagesTitle: '主题页面',
+        pagesSub: '同一主题的结论合成一页，点开可看可改',
+
       },
       en: {
         panel: 'Long-term memory',
@@ -289,6 +292,9 @@ window.__ModuleLoader__.load({
         modelLoadFail: 'Could not load model info',
 
         modelStalled: 'stalled {n}s',
+
+        pagesTitle: 'Topic pages',
+        pagesSub: 'Conclusions merged per topic; open to read or edit',
 
     }
 
@@ -1602,6 +1608,7 @@ window.__ModuleLoader__.load({
         notes: [t('notes'), t('notesSub')],
         points: [t('points'), t('pointsSub')],
         relations: [t('links'), t('linksSub')],
+        pages: [t('pagesTitle'), t('pagesSub')],
         relList: [t('relListTitle'), t('relListSub')],
         recent: [t('updated'), t('updatedSub')],
         note: [view.title ?? '', t('noteBody')],
@@ -1684,7 +1691,9 @@ window.__ModuleLoader__.load({
                 : null,
               (view.name === 'relations') ? null
               : h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6 } },
-                (view.name === 'notes' && query.trim() && hits ? hits : rows).map((r) => {
+                (view.name === 'pages'
+                  ? rows.filter((r) => r.type === 'page')
+                  : (view.name === 'notes' && query.trim() && hits ? hits : rows)).map((r) => {
                   const v = view.name === 'notes' && query.trim() && hits
                     ? { key: `${r.path}-${r.line ?? ''}`, title: r.kind === 'obs' ? `[${r.cat}] ${r.text}` : r.title,
                         meta: r.kind === 'obs' ? `← ${r.title}` : `${r.project ?? ''} · ${r.path}`,
@@ -1859,7 +1868,7 @@ window.__ModuleLoader__.load({
                 }, label)))),
 
           tab === 'overview' ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 10 } },
-          h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 } },
+          h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 } },
             h(Field, {
               value: overview?.notes ?? '—', label: t('notes'), sub: t('notesSub'),
               onClick: () => openPage('notes'),
@@ -1867,6 +1876,11 @@ window.__ModuleLoader__.load({
             h(Field, {
               value: overview?.obs ?? '—', label: t('points'), sub: t('pointsSub'),
               onClick: () => openPage('points'),
+            }),
+            h(Field, {
+              value: (overview?.by_type ?? []).find((x) => x.key === 'page')?.count ?? 0,
+              label: t('pagesTitle'), sub: t('pagesSub'),
+              onClick: () => openPage('pages'),
             }),
             h(Field, {
               value: overview?.rel ?? '—', label: t('links'), sub: t('linksSub'),
