@@ -275,6 +275,25 @@ def validate(note, schemas):
     return problems
 
 
+
+def check_content(type_name, text, schemas):
+    """写入前检查：该类型要求的观察类别，正文里是否至少出现一条。返回问题列表。"""
+    spec = schemas.get(type_name or "note")
+    if not spec:
+        return []
+    need = spec.get("required_observations") or []
+    if not need:
+        return []
+    import re as _re
+    cats = set(_re.findall(r"^-\s*\[([^\]]+)\]", text or "", flags=_re.M))
+    missing = [c for c in need if c not in cats]
+    if not missing:
+        return []
+    have = "、".join(f"[{c}]" for c in sorted(cats)) or "（没有任何类别）"
+    want = "、".join(f"[{c}]" for c in missing)
+    return [f"这篇是「{type_name}」类型，必须至少有一条 {want} 开头的要点；你写的是 {have}"]
+
+
 # ---------------- 存储 ----------------
 
 SCHEMA = """

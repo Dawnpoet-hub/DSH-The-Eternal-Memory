@@ -114,6 +114,15 @@ def _slug(title):
 
 def write_note(title, content, type_="note", tags=None, append=False, project="main"):
     roots = {n: r for n, r in _core.load_projects()}
+    # 写入前先按 schema 校验类别，不合格直接拒绝（而不是等他日体检才发现）
+    _schemas = _core.load_schemas()
+    path0 = (roots.get(project or "main") or (WS / "memory")) / f"{_slug(title)}.md"
+    _full = content
+    if append and path0.exists():
+        _full = path0.read_text(encoding="utf-8") + "\n" + content
+    _problems = _core.check_content(type_, _full, _schemas)
+    if _problems:
+        raise ValueError("；".join(_problems))
     d = roots.get(project or "main") or (WS / "memory")
     d.mkdir(parents=True, exist_ok=True)
     path = d / f"{_slug(title)}.md"
