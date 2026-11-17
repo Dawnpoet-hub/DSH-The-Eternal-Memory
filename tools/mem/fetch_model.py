@@ -15,6 +15,7 @@ import json
 import os
 import sys
 import threading
+import time
 import traceback
 
 
@@ -68,15 +69,37 @@ def main() -> int:
     write(out_path, {"done": 0, "total": total, "state": "running"})
 
     stop = threading.Event()
+    last = {"bytes": 0, "at": time.time()}
 
     def pump() -> None:
         while not stop.is_set():
             done = min(total - 1, max(0, cache_bytes(cache_dir) - baseline))
-            write(out_path, {"done": done, "total": total, "state": "running"})
+            now = time.time()
+            if done != last["bytes"]:
+                last["bytes"] = done
+                last["at"] = now
+            stalled = int(now - last["at"])
+            write(out_path, {"done": done, "total": total, "state": "running", "stalled": stalled})
             stop.wait(0.5)
 
     thread = threading.Thread(target=pump, daemon=True)
     thread.start()
+
+    def watchdog() -> None:
+        while not stop.is_set():
+            if os.environ.get("LM_DOWNLOAD_STALL_LIMIT"):
+                limit = int(os.environ["LM_DOWNLOAD_STALL_LIMIT"])
+            else:
+                limit = 180
+            if time.time() - last["at"] > limit:
+                write(out_path, {
+                    "done": last["bytes"], "total": total, "state": "error",
+                    "error": f"网络 {limit} 秒没有进展，已停止；请检查网络后重试",
+                })
+                os._exit(3)
+            stop.wait(2)
+
+    threading.Thread(target=watchdog, daemon=True).start()
 
     try:
         if rerank:

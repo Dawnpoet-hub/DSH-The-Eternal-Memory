@@ -664,12 +664,13 @@ function downloadProgress() {
         total = Number(p.total) || 0
         if (p.state === 'done') { state = 'done'; bytes = total || bytes }
         if (p.state === 'error') { state = 'error'; error = p.error || error }
+        if (typeof p.stalled === 'number') info.pythonStalled = p.stalled
       }
     } catch { /* ignore */ }
     // 停滞检测：记录上次字节变化时间
     const now = Date.now()
     if (info.lastBytes !== bytes) { info.lastBytes = bytes; info.lastChangeAt = now }
-    const stalledSec = Math.max(0, Math.round((now - (info.lastChangeAt ?? now)) / 1000))
+    const stalledSec = info.pythonStalled ?? Math.max(0, Math.round((now - (info.lastChangeAt ?? now)) / 1000))
     if (state === 'done') continue
     const expected = total || Math.round((info.expectedGB ?? 0.6) * 1024 ** 3)
     // 保留一位小数，避免低速下载时长时间停在「1%」
