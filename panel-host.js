@@ -668,7 +668,8 @@ function downloadProgress() {
     } catch { /* ignore */ }
     if (state === 'done') continue
     const expected = total || Math.round((info.expectedGB ?? 0.6) * 1024 ** 3)
-    const progress = total > 0 && bytes > 0 ? Math.min(99, Math.max(1, Math.round((bytes / total) * 100))) : 0
+    // 保留一位小数，避免低速下载时长时间停在「1%」
+    const progress = total > 0 && bytes > 0 ? Math.min(99, Math.round((bytes / total) * 1000) / 10) : 0
     out[model] = { progress, bytes, expected, status: state, error }
   }
   return out
