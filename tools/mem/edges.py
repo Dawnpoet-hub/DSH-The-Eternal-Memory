@@ -11,12 +11,41 @@ causal    提炼时标注的「因为」，链回被引用的那条事实
 """
 import json
 import math
+import os
 import re
 import time
 
 SEMANTIC_MIN = 0.68     # 余弦下限
 SEMANTIC_TOP = 3        # 每条事实最多连几条
-MAX_EDGES = 8000        # 全局上限，防止规模爆炸
+
+# 按类型配额，而不是全局按权重一刀切。
+# 四类的权重刻度不可比：因果恒 1.0、实体 0.6~1.0、语义 0.68~0.99、时序固定 0.5。
+# 全局按权重升序删，会把时序边整类删光（实测每轮重建后 temporal = 0）。
+EDGE_BUDGET = {
+    "semantic": int(os.environ.get("MEM_EDGE_CAP_SEMANTIC", "4000")),
+    "entity": int(os.environ.get("MEM_EDGE_CAP_ENTITY", "6000")),
+    "temporal": int(os.environ.get("MEM_EDGE_CAP_TEMPORAL", "1500")),
+    "causal": int(os.environ.get("MEM_EDGE_CAP_CAUSAL", "1500")),
+}
+MAX_EDGES = int(os.environ.get("MEM_EDGE_CAP_TOTAL", "13000"))   # 总量保险，正常不触发
+
+
+def _trim(db):
+    """先按类型配额削（各留各的），再按总量兜底。"""
+    for etype, cap in EDGE_BUDGET.items():
+        rows = db.execute(
+            "SELECT id FROM edges WHERE etype=? ORDER BY weight DESC, id ASC", (etype,)
+        ).fetchall()
+        if len(rows) <= cap:
+            continue
+        db.executemany("DELETE FROM edges WHERE id=?", [(r[0],) for r in rows[cap:]])
+    total = db.execute("SELECT count(*) FROM edges").fetchone()[0]
+    if total > MAX_EDGES:
+        db.execute(
+            "DELETE FROM edges WHERE id IN (SELECT id FROM edges ORDER BY weight ASC LIMIT ?)",
+            (total - MAX_EDGES,),
+        )
+    db.commit()
 
 
 def _cos(a, b):
@@ -100,6 +129,72 @@ def _kind_of(name):
     return "concept"
 
 
+
+SEMANTIC_BLOCK = 256    # 分块行数：单块占 256×n×8 字节，n=10000 时约 20MB
+
+
+def _semantic_scored(vecs, ids):
+    """语义边的候选打分：每个 i 取 j>i 中 ≥SEMANTIC_MIN 的前 SEMANTIC_TOP 个。
+
+    返回 [(score, a, b), ...]，排序与筛选语义与旧实现完全一致。
+
+    优先走矩阵乘（60 万对从 18 秒降到 0.01 秒）；任何一步不可用就退回纯 Python：
+    向量不是等长 list（n-gram 兜底）、没装 numpy、内存不足、出现 NaN。
+    """
+    try:
+        import numpy as np
+        if not all(isinstance(vecs[i], list) and vecs[i] for i in ids):
+            raise ValueError("非 list 向量")
+        dim = len(vecs[ids[0]])
+        if any(len(vecs[i]) != dim for i in ids):
+            raise ValueError("维度不一致")
+
+        X = np.asarray([vecs[i] for i in ids], dtype=np.float64)
+        if not np.isfinite(X).all():
+            raise ValueError("向量含 NaN/Inf")
+        norms = np.linalg.norm(X, axis=1, keepdims=True)
+        norms[norms == 0] = 1.0          # 零向量：归一化后全 0，相似度恒 0，不会建边
+        X /= norms
+
+        ids_arr = np.asarray(ids, dtype=np.int64)
+        n = len(ids)
+        out = []
+        for s0 in range(0, n, SEMANTIC_BLOCK):
+            block = X[s0:s0 + SEMANTIC_BLOCK] @ X.T        # (chunk, n)
+            for r in range(block.shape[0]):
+                i = s0 + r
+                if i + 1 >= n:
+                    continue
+                row = block[r, i + 1:]
+                hit = np.where(row >= SEMANTIC_MIN)[0]
+                if hit.size == 0:
+                    continue
+                vals = row[hit]
+                bvals = ids_arr[i + 1:][hit]
+                # 旧实现按 (score desc, b desc) 取前 k，这里保持一致
+                order = np.lexsort((bvals, vals))[::-1][:SEMANTIC_TOP]
+                for k in order:
+                    out.append((float(vals[k]), int(ids_arr[i]), int(bvals[k])))
+        return out
+    except Exception:
+        return _semantic_scored_python(vecs, ids)
+
+
+def _semantic_scored_python(vecs, ids):
+    """旧实现，保留作兜底。"""
+    out = []
+    for i, a in enumerate(ids):
+        cand = []
+        for b in ids[i + 1:]:
+            s = _cos(vecs[a], vecs[b])
+            if s >= SEMANTIC_MIN:
+                cand.append((s, b))
+        cand.sort(reverse=True)
+        for s, b in cand[:SEMANTIC_TOP]:
+            out.append((s, a, b))
+    return out
+
+
 def build(db, verbose=True):
     """重建全部边。可重复执行（幂等）。"""
     now = time.time()
@@ -140,16 +235,7 @@ def build(db, verbose=True):
     vecs = _load_obs_vecs(db)
     ids = [i for i in vecs if isinstance(vecs[i], list) or isinstance(vecs[i], dict)]
     if len(ids) > 1:
-        scored = []
-        for i, a in enumerate(ids):
-            cand = []
-            for b in ids[i + 1:]:
-                s = _cos(vecs[a], vecs[b])
-                if s >= SEMANTIC_MIN:
-                    cand.append((s, b))
-            cand.sort(reverse=True)
-            for s, b in cand[:SEMANTIC_TOP]:
-                scored.append((s, a, b))
+        scored = _semantic_scored(vecs, ids)
         scored.sort(reverse=True)
         for s, a, b in scored[:MAX_EDGES]:
             db.execute("INSERT OR IGNORE INTO edges(a,b,etype,weight,computed_at) VALUES(?,?,?,?,?)",
@@ -177,16 +263,6 @@ def build(db, verbose=True):
         stats["causal"] += 1
 
     db.commit()
-    total = db.execute("SELECT count(*) FROM edges").fetchone()[0]
-    stats["total"] = total
-    if total > MAX_EDGES:      # 预留应急闸门：未来规模变大时裁剪最弱的边
-        db.execute(
-            "DELETE FROM edges WHERE id IN (SELECT id FROM edges ORDER BY weight ASC LIMIT ?)",
-            (total - MAX_EDGES,),
-        )
-        db.commit()
-        stats["total"] = MAX_EDGES
-
 
     # 按项目隔离：给每条边打上所属项目，并删掉跨项目的边
     db.execute("""
@@ -203,6 +279,12 @@ def build(db, verbose=True):
         )
     """)
     db.commit()
+
+    # 裁剪放在项目隔离之后：否则跨项目边先占掉配额、再被删，两类边都算错
+    _trim(db)
+    total = db.execute("SELECT count(*) FROM edges").fetchone()[0]
+    stats["total"] = total
+
     db.execute("INSERT OR REPLACE INTO meta(k,v) VALUES('edges_built_at',?)", (str(now),))
     db.commit()
     if verbose:

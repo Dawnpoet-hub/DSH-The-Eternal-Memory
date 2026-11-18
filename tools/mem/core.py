@@ -18,6 +18,17 @@ WS = Path(__file__).resolve().parents[2]
 DB_PATH = WS / ".mem" / "index.db"
 _DB_OVERRIDE = None   # 重建时指向临时库，建完再原子替换
 CONFIG = WS / "mem.json"
+INDEX_LOG = WS / ".mem" / "index.log"     # 每次构建一行 JSONL，用于长期观测边健康度
+
+
+def _log_index(rec):
+    """记录一次构建。日志失败绝不影响构建本身。"""
+    try:
+        INDEX_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with INDEX_LOG.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
 
 OBS_RE = re.compile(r"^\s*-\s*\[([^\]]+)\]\s+(.+?)\s*$")
 REL_RE = re.compile(r"^\s*-\s*([^\[\]]*?)\s*\[\[([^\]]+)\]\](.*)$")
@@ -394,18 +405,43 @@ def build(verbose=True, rebuild=True, edges_enabled=True):
     同时用文件锁阻止并发重建。
     """
     global _DB_OVERRIDE
+    t_build = time.time()
+
+    # 全量和增量都必须上锁：增量以前不上锁，可能与「建到临时库再 os.replace」的
+    # 全量重建并发写同一个库，实测会造成 database disk image is malformed。
+    lock = DB_PATH.with_suffix(".lock")
+    try:
+        fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.write(fd, str(os.getpid()).encode())
+        os.close(fd)
+    except FileExistsError:
+        # 锁可能是崩溃残留：持锁进程不在了就回收一次，避免永久死锁
+        stale = False
+        try:
+            pid = int(lock.read_text().strip() or "0")
+            os.kill(pid, 0)
+        except (ValueError, ProcessLookupError, PermissionError):
+            stale = True
+        except Exception:
+            stale = False
+        if stale:
+            try:
+                lock.unlink()
+            except FileNotFoundError:
+                pass
+            try:
+                fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                os.write(fd, str(os.getpid()).encode())
+                os.close(fd)
+            except FileExistsError:
+                stale = False
+        if not stale:
+            # 已有构建在进行：本次跳过。写回的事实还在 markdown 里，下次会补上
+            if verbose:
+                print("另一个构建正在进行，跳过本次")
+            return {"new": 0, "skip": 0, "notes": 0, "obs": 0, "rel": 0, "busy": True}
 
     if rebuild:
-        lock = DB_PATH.with_suffix(".lock")
-        try:
-            fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            os.write(fd, str(os.getpid()).encode())
-            os.close(fd)
-        except FileExistsError:
-            # 已有重建在进行：本次直接跳过，避免两个进程互相踩
-            if verbose:
-                print("另一个重建正在进行，跳过本次")
-            return {"new": 0, "skip": 0, "notes": 0, "obs": 0, "rel": 0, "busy": True}
         tmp = DB_PATH.with_suffix(".db.build")
         for suffix in ("", "-wal", "-shm"):
             try:
@@ -413,8 +449,6 @@ def build(verbose=True, rebuild=True, edges_enabled=True):
             except FileNotFoundError:
                 pass
         _DB_OVERRIDE = str(tmp)
-    else:
-        lock = None
     db = connect()
     if rebuild:
         db.executescript(SCHEMA)
@@ -522,15 +556,46 @@ def build(verbose=True, rebuild=True, edges_enabled=True):
     db.execute("INSERT OR REPLACE INTO meta(k,v) VALUES('schema_version','2')")
     db.commit()
 
+    edge_mix, edges_ms = {}, None
     if edges_enabled:
         import edges as EG
+        t_edges = time.time()
         try:
             stats["edges"] = EG.build(db, verbose=verbose)
+            stats["edges_ok"] = True
         except Exception as e:
+            # 失败必须留痕：以前只 print 一行，面板上看不出关系图为什么是空的
+            stats["edges_ok"] = False
+            stats["edges_error"] = str(e)[:300]
             print(f"⚠ 关系边生成失败（{e}），其余功能不受影响")
+        edges_ms = int((time.time() - t_edges) * 1000)
+        try:
+            edge_mix = {t: c for t, c in db.execute(
+                "SELECT etype, count(*) FROM edges GROUP BY etype")}
+        except Exception:
+            edge_mix = {}
+        stats["edges_ms"] = edges_ms
+        stats["edge_mix"] = edge_mix
+        try:
+            for k, v in (("edges_built_ms", edges_ms),
+                         ("edges_build_ok", "1" if stats.get("edges_ok") else "0"),
+                         ("edges_mix", json.dumps(edge_mix, ensure_ascii=False)),
+                         ("edges_error", stats.get("edges_error", ""))):
+                db.execute("INSERT OR REPLACE INTO meta(k,v) VALUES(?,?)", (k, str(v)))
+            db.commit()
+        except Exception:
+            pass
 
     stats["notes"] = db.execute("SELECT count(*) FROM notes").fetchone()[0]
     db.close()
+
+    stats["ms"] = int((time.time() - t_build) * 1000)
+    _log_index({"t": int(time.time() * 1000), "ev": "index",
+                "mode": "full" if rebuild else "update",
+                "ms": stats["ms"], "edges_ms": edges_ms,
+                "obs": stats.get("obs"), "new": stats.get("new"),
+                "edges": edge_mix, "ok": bool(stats.get("edges_ok", True)),
+                "err": stats.get("edges_error", "")})
 
     if rebuild:
         # 临时库建好后原子替换，读者要么看到旧库、要么看到新库，不会看到半成品
@@ -540,13 +605,22 @@ def build(verbose=True, rebuild=True, edges_enabled=True):
                     Path(str(tmp) + suffix).unlink()
                 except FileNotFoundError:
                     pass
+            # 旧库的 WAL/SHM 必须一并清掉：新库沿用同一个文件名，
+            # 残留的 WAL 会被当作新库的日志回放，直接写坏页面。
+            for suffix in ("-wal", "-shm"):
+                try:
+                    Path(str(DB_PATH) + suffix).unlink()
+                except FileNotFoundError:
+                    pass
             os.replace(str(tmp), str(DB_PATH))
         finally:
             _DB_OVERRIDE = None
-            try:
-                lock.unlink()
-            except FileNotFoundError:
-                pass
+
+    # 无论全量还是增量，都必须释放锁（增量以前不上锁，现在共用同一把）
+    try:
+        lock.unlink()
+    except FileNotFoundError:
+        pass
     if violations:
         print(f"⚠ schema 校验：{len(violations)} 处不合规")
         for path, prob in violations[:8]:

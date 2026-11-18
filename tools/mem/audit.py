@@ -225,6 +225,53 @@ def _log_metrics(log_path, since_ms=None):
     return inj, dist, queries
 
 
+EDGE_TYPES = ("semantic", "entity", "temporal", "causal")
+
+
+def _index_metrics(log_path, since_ms=None):
+    """构建健康度：读 .mem/index.log（每次构建一行）。
+
+    重点不是"快不快"，而是"边还在不在"——四类边任一归零都说明构建出了问题，
+    而这种问题在界面上只表现为"关系图变空了"，很难自发发现。
+    """
+    import json as _json
+    import statistics as _st
+
+    recs = []
+    try:
+        for line in log_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                e = _json.loads(line)
+            except Exception:
+                continue
+            if since_ms and e.get("t", 0) < since_ms:
+                continue
+            recs.append(e)
+    except FileNotFoundError:
+        return None
+    if not recs:
+        return None
+
+    ms = [r["ms"] for r in recs if isinstance(r.get("ms"), int)]
+    ems = [r["edges_ms"] for r in recs if isinstance(r.get("edges_ms"), int)]
+    last = recs[-1]
+    mix = last.get("edges") or {}
+    return {
+        "runs": len(recs),
+        "fails": sum(1 for r in recs if r.get("ok") is False),
+        "ms_median": int(_st.median(ms)) if ms else None,
+        "ms_max": max(ms) if ms else None,
+        "edges_ms_median": int(_st.median(ems)) if ems else None,
+        "last_mix": mix,
+        "last_t": last.get("t"),
+        "last_mode": last.get("mode"),
+        "zero_types": [t for t in EDGE_TYPES if not mix.get(t)],
+    }
+
+
 def _recall_duplicates(queries, keymap, samples):
     """重放历史提问的检索，统计返回结果里同簇重复的比例。"""
     import search as S
@@ -292,6 +339,7 @@ def collect(recall_samples=0, since_ms=None):
     worst = sorted(((b - a, p, b, a) for p, b, a in per_note if b > a), reverse=True)[:10]
 
     inj, dist, queries = _log_metrics(core.WS / ".mem" / "auto.log", since_ms)
+    idx = _index_metrics(core.WS / ".mem" / "index.log", since_ms)
 
     out = {
         "ts": int(time.time()),
@@ -306,6 +354,7 @@ def collect(recall_samples=0, since_ms=None):
         "conflict_candidates": conflicts,
         "injection": inj,
         "distill": dist,
+        "index": idx,
         "since_ms": since_ms,
     }
     if recall_samples:
@@ -329,6 +378,18 @@ def render(r):
         for w in red["worst_notes"][:5]:
             L.append(f"    {w['path'].replace('memory/', ''):<40} {w['before']} → {w['after']}")
     L.append(f"  冲突候选（宽松口径，只作趋势） {r['conflict_candidates']}")
+    idx = r.get("index") or {}
+    if idx.get("runs"):
+        L.append(
+            f"  构建 {idx['runs']} 次  整体中位 {idx.get('ms_median')}ms  "
+            f"其中关系边 {idx.get('edges_ms_median')}ms  失败 {idx.get('fails')} 次"
+        )
+        mix = idx.get("last_mix") or {}
+        if mix:
+            seg = " / ".join(f"{t} {mix.get(t, 0)}" for t in EDGE_TYPES)
+            L.append(f"    最近一次（{idx.get('last_mode')}）：{seg}")
+        if idx.get("zero_types"):
+            L.append(f"    ⚠ 边类型归零：{'、'.join(idx['zero_types'])}（关系图会缺这一维）")
     inj = r.get("injection") or {}
     if inj.get("events"):
         L.append(
