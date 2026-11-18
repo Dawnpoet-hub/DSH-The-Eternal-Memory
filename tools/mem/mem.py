@@ -134,7 +134,8 @@ def cmd_list(a):
         rows = db.execute(
             """SELECT n.path, n.title, n.type, n.project, n.tags, n.mtime,
                       (SELECT count(*) FROM obs o WHERE o.note_id = n.id) AS obs_count
-               FROM notes n ORDER BY n.mtime DESC"""
+               FROM notes n{where} ORDER BY n.mtime DESC""".format(
+                where=" WHERE n.type != 'page'" if getattr(a, "no_pages", False) else "")
         ).fetchall()
         indexed = {r[0]: r[1] for r in db.execute("SELECT path, hash FROM notes")}
     finally:
@@ -157,6 +158,8 @@ def cmd_list(a):
         for f in sorted(root.rglob("*.md")):
             rel = str(f.relative_to(core.WS))
             if rel in seen or not _indexable(f):
+                continue
+            if getattr(a, "no_pages", False) and "pages" in f.parts:
                 continue
             items.append({"path": rel, "title": f.stem, "type": "note", "project": project,
                           "tags": [], "mtime": f.stat().st_mtime, "obs": 0,
@@ -483,6 +486,8 @@ def main():
 
     p = sub.add_parser("list", help="列出全部笔记")
     p.add_argument("--project")
+    p.add_argument("--no-pages", action="store_true",
+                   help="排除主题页面（type=page）：它们是派生视图，不是记忆")
     p.add_argument("--json", action="store_true")
     p.set_defaults(fn=cmd_list)
 

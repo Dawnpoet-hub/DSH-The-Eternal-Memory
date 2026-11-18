@@ -638,6 +638,29 @@ window.__ModuleLoader__.load({
     }
 
     // 关系图：小型力导向布局，纯 SVG，无第三方库
+    // 关系图的视觉语法：四类边不是同等重要的。
+    // causal 稀有且有方向感，当骨架；semantic 占七成连接，退成底纹。
+    const EDGE_VISUAL = {
+      causal:   { w: 1.6, o: 0.90, dash: null },
+      temporal: { w: 1.2, o: 0.70, dash: null },
+      entity:   { w: 1.0, o: 0.55, dash: null },
+      semantic: { w: 0.8, o: 0.18, dash: '3 5' },
+    }
+    const EDGE_FALLBACK = { w: 1.0, o: 0.45, dash: null }
+    // 全局线条强度：整体调节连线透明度，1 = 原始，0.5 = 全部减弱一半
+    const EDGE_STRENGTH = 0.5
+    // 弱语义连线不画：count=1 的那 148 对几乎都是噪声，删掉能降 18% 密度
+    const SEMANTIC_MIN_COUNT = 2
+
+    // 确定性布局用的字符串哈希（对齐 Hindsight 的 hashStr）
+    const hashStr = (s) => {
+      let h = 0
+      for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0
+      return h
+    }
+    // 黄金角：让点在环上均匀铺开又不需要计算，是向日葵螺旋的经典常数
+    const GOLDEN = 2.399963229728653
+
     function Graph({ relations, notes, selected, onSelect, t, size = 1100 }) {
       const [hover, setHover] = useState(null)
       const [view, setView] = useState({ k: 1, x: 0, y: 0 })
@@ -684,59 +707,53 @@ window.__ModuleLoader__.load({
         return { k, x: cx - (cx - v.x) * r, y: cy - (cy - v.y) * r }
       })
 
-      const { nodes, links, types } = useMemo(() => {
+      const { nodes, links, types, hubs } = useMemo(() => {
         const byPath = new Map()
         for (const n of notes) byPath.set(n.path, { path: n.path, title: n.title, type: n.type || 'note', degree: 0 })
         const links = []
         const types = new Set()
         for (const r of relations) {
           if (!r.toPath || !byPath.has(r.fromPath) || !byPath.has(r.toPath)) continue
-          links.push({ a: r.fromPath, b: r.toPath, type: r.type })
+          const count = r.count ?? 1
+          // 弱语义连线不画，只留足够强的做「纹理」
+          if (r.type === 'semantic' && count < SEMANTIC_MIN_COUNT) continue
+          links.push({ a: r.fromPath, b: r.toPath, type: r.type, count })
           types.add(r.type)
           byPath.get(r.fromPath).degree++
           byPath.get(r.toPath).degree++
         }
         const nodes = [...byPath.values()]
-        const cx = W / 2, cy = H / 2, rad = Math.min(W, H) * 0.30
+        // 确定性布局：位置由「连接数排名 + id 哈希」算出来，没有物理模拟。
+        // 好处是每次打开同一份数据位置完全一样，能对比「改配置前 / 后」的图。
+        // 连接数排名决定半径：枢纽在内圈、叶子在外圈，让结构不靠颜色也读得出来。
+        const maxDeg = Math.max(1, ...nodes.map((n) => n.degree))
+        const count = Math.max(1, nodes.length)
+        const byRank = [...nodes].sort((a, b) =>
+          b.degree - a.degree || (a.path < b.path ? -1 : 1))
+        const rankOf = new Map(byRank.map((n, i) => [n.path, i]))
+        const R1 = W * 0.10          // 内圈：枢纽
+        const R2 = W * 0.44          // 外圈：叶子
         nodes.forEach((n, i) => {
-          const a = (i / Math.max(1, nodes.length)) * Math.PI * 2
-          n.x = cx + Math.cos(a) * rad; n.y = cy + Math.sin(a) * rad
-          n.vx = 0; n.vy = 0
+          const seed = hashStr(n.path)
+          const jit = (Math.abs(seed) % 1000) / 1000
+          const t = rankOf.get(n.path) / Math.max(1, count - 1)
+          // 指数 0.6：让低连接度的节点更快散到外圈，避免枢纽在圆心挤成一团
+          const radius = (R1 + (R2 - R1) * Math.pow(t, 0.6)) * (0.88 + 0.24 * jit)
+          const angle = i * GOLDEN + jit * 0.5
+          // 环境漂移的相位：每个节点不同步，整片像在呼吸而不是齐步走
+          n.phase = jit * Math.PI * 2
+          // 半径 6–9（最大 = 最小 × 1.5）。用 sqrt 归一：线性的话只有榜首到 9、
+          // 其余全挤在 6.5 附近，开方后中位连接数能落在 7.5 左右，差异才看得出
+          n.r0 = 6 + 3 * Math.sqrt(Math.min(1, n.degree / maxDeg))
+          n.x = W / 2 + Math.cos(angle) * radius
+          n.y = H / 2 + Math.sin(angle) * radius * 0.62   // 画布宽高比 1:0.62，纵向压平
+          n.x = Math.max(120, Math.min(W - 120, n.x))
+          n.y = Math.max(26, Math.min(H - 22, n.y))
         })
-        const idx = new Map(nodes.map((n, i) => [n.path, i]))
-        for (let it = 0; it < 420; it++) {
-          const k = 1 - it / 420
-          for (let i = 0; i < nodes.length; i++) {
-            for (let j = i + 1; j < nodes.length; j++) {
-              const a = nodes[i], b = nodes[j]
-              let dx = a.x - b.x, dy = a.y - b.y
-              const d2 = dx * dx + dy * dy || 0.01
-              const f = 3000 / d2 * k
-              const d = Math.sqrt(d2)
-              dx /= d; dy /= d
-              a.vx += dx * f; a.vy += dy * f
-              b.vx -= dx * f; b.vy -= dy * f
-            }
-          }
-          for (const l of links) {
-            const a = nodes[idx.get(l.a)], b = nodes[idx.get(l.b)]
-            let dx = b.x - a.x, dy = b.y - a.y
-            const d = Math.sqrt(dx * dx + dy * dy) || 0.01
-            const f = (d - 240) * 0.022 * k
-            dx /= d; dy /= d
-            a.vx += dx * f; a.vy += dy * f
-            b.vx -= dx * f; b.vy -= dy * f
-          }
-          for (const n of nodes) {
-            n.vx += (W / 2 - n.x) * 0.0022 * k
-            n.vy += (H / 2 - n.y) * 0.0022 * k
-            n.x += n.vx; n.y += n.vy
-            n.vx *= 0.8; n.vy *= 0.8
-            n.x = Math.max(120, Math.min(W - 120, n.x))
-            n.y = Math.max(26, Math.min(H - 22, n.y))
-          }
-        }
-        return { nodes, links, types: [...types] }
+        // 枢纽：连接数前 6。它们聚在图心，标太多会互相压字，6 个是密度上限
+        const hubsSet = new Set(
+          [...nodes].sort((a, b) => b.degree - a.degree).slice(0, 6).map((n) => n.path))
+        return { nodes, links, types: [...types], hubs: hubsSet }
       }, [relations, notes, W, H])
 
       // 宿主背景是深还是浅：决定用亮色还是深色调色板，避免浅色主题下彩色点看不见
@@ -769,6 +786,151 @@ window.__ModuleLoader__.load({
       const near = (p) => !hover || p === hover ||
         links.some((l) => (l.a === hover && l.b === p) || (l.b === hover && l.a === p))
 
+      const [enter, setEnter] = useState(1)
+      useEffect(() => {
+        if (typeof window === 'undefined') return
+        if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
+        setEnter(0)
+        let raf = 0
+        const t0 = performance.now()
+        const step = (t) => {
+          const q = Math.min(1, (t - t0) / 620)
+          setEnter(1 - Math.pow(1 - q, 3))
+          if (q < 1) raf = requestAnimationFrame(step)
+        }
+        raf = requestAnimationFrame(step)
+        return () => cancelAnimationFrame(raf)
+      }, [])
+
+      // 环境漂移（对齐 Hindsight 的 Constellation）：每个节点按独立相位做正弦位移，
+      // 连线跟随重算。时钟只在「开启」时累加，所以暂停会冻结在原位、恢复后不跳变。
+      const [motion, setMotion] = useState(true)
+      const nodeRefs = useRef([])
+      const linkRefs = useRef([])
+      const labelRefs = useRef([])
+      const circleRefs = useRef([])
+      const linkGroupRef = useRef(null)
+      const hoverRef = useRef(null)
+      const clockRef = useRef({ seconds: 0, paint: 0 })
+      hoverRef.current = hover   // 悬停时暂停动效，避免和 hover 的缩放/压暗打架
+
+      useEffect(() => {
+        try { if (localStorage.getItem('mem-graph-motion') === 'off') setMotion(false) } catch {}
+      }, [])
+
+      const toggleMotion = () => setMotion((m) => {
+        const next = !m
+        try { localStorage.setItem('mem-graph-motion', next ? 'on' : 'off') } catch {}
+        return next
+      })
+
+      useEffect(() => {
+        if (typeof window === 'undefined') return
+        if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
+        if (!motion || !nodes.length) return
+        const DRIFT = 16        // 世界坐标里的位移幅度（画布 1100 宽，16 ≈ 1.5%）
+        const FRAME_MS = 33     // 约 30fps：SVG 逐帧改 669 条路径，再高就费电了
+        const byId = new Map(nodes.map((n) => [n.path, n]))
+        const drift = (time, n) => [
+          DRIFT * Math.sin(time * 0.6 + n.phase),
+          DRIFT * Math.cos(time * 0.5 + n.phase * 1.3),
+        ]
+
+        const paintNodes = (time) => {
+          for (let i = 0; i < nodes.length; i++) {
+            const n = nodes[i]
+            const [dx, dy] = time === null ? [0, 0] : drift(time, n)
+            const t = `translate(${dx.toFixed(2)} ${dy.toFixed(2)})`
+            nodeRefs.current[i] && nodeRefs.current[i].setAttribute('transform', t)
+            labelRefs.current[i] && labelRefs.current[i].setAttribute('transform', t)
+            const c = circleRefs.current[i]
+            if (!c) continue
+            if (time === null) {
+              c.setAttribute('r', String(n.r0))
+              c.setAttribute('fill-opacity', '1')
+              continue
+            }
+            // 尺寸呼吸：每个点以自己的相位胀缩，整片像活着的星图
+            const pulse = 1 + 0.13 * Math.sin(time * 1.05 + n.phase)
+            // 亮度闪烁：与尺寸相位错开，让肉眼在小点上也能感觉到「在动」
+            const twinkle = 0.82 + 0.18 * Math.sin(time * 1.4 + n.phase * 2.1)
+            c.setAttribute('r', (n.r0 * pulse).toFixed(2))
+            c.setAttribute('fill-opacity', twinkle.toFixed(3))
+          }
+        }
+        const paintLinks = (time) => {
+          if (linkGroupRef.current) {
+            // 整组一起呼吸：+/-18%，比逐条改 669 个渐变便宜得多
+            const shimmer = time === null ? 1 : 1 + 0.18 * Math.sin(time * 0.6)
+            linkGroupRef.current.setAttribute('opacity', shimmer.toFixed(3))
+          }
+          for (let i = 0; i < links.length; i++) {
+            const l = links[i], p2 = linkRefs.current[i]
+            const a = byId.get(l.a), b = byId.get(l.b)
+            if (!p2 || !a || !b) continue
+            const [ax, ay] = time === null ? [0, 0] : drift(time, a)
+            const [bx, by] = time === null ? [0, 0] : drift(time, b)
+            const x1 = a.x + ax, y1 = a.y + ay, x2 = b.x + bx, y2 = b.y + by
+            const mx = (x1 + x2) / 2 + (y2 - y1) * 0.08
+            const my = (y1 + y2) / 2 - (x2 - x1) * 0.08
+            p2.setAttribute('d',
+              `M${x1.toFixed(1)} ${y1.toFixed(1)} Q${mx.toFixed(1)} ${my.toFixed(1)} ${x2.toFixed(1)} ${y2.toFixed(1)}`)
+          }
+        }
+
+        let raf = 0
+        let last = 0
+        const tick = (t) => {
+          raf = requestAnimationFrame(tick)
+          if (last) clockRef.current.seconds += (t - last) / 1000
+          last = t
+          if (hoverRef.current) return          // 悬停时冻结，让 hover 的缩放与压暗生效
+          if (t - clockRef.current.paint < FRAME_MS) return
+          clockRef.current.paint = t
+          paintNodes(clockRef.current.seconds)
+          paintLinks(clockRef.current.seconds)
+        }
+        raf = requestAnimationFrame(tick)
+        return () => {
+          cancelAnimationFrame(raf)
+          paintNodes(null)   // 暂停/卸载时归位，避免停在偏移位置
+          paintLinks(null)
+        }
+      }, [motion, nodes, links])
+
+      // 标签位置先算好再做纵向避让，最后统一画一层（保证压在圆点之上）。
+      // 默认缩放下只标枢纽（6 个），全铺开会把图糊死。
+      const labelItems = (() => {
+        const out = []
+        for (let i = 0; i < nodes.length; i++) {
+          const n = nodes[i]
+          const isNear = near(n.path)
+          if (hover ? !isNear : (view.k < 1.35 && !hubs.has(n.path))) continue
+          const r = hover ? (isNear ? n.r0 * 1.06 : n.r0 * 0.72) : n.r0
+          // 沿「远离图心」的方向外推：枢纽都挤在图心，正上方叠会压字
+          let dx = n.x - W / 2, dy = n.y - H / 2
+          if (Math.hypot(dx, dy) < 30) { dx = 0; dy = 1 }
+          const norm = Math.hypot(dx, dy) || 1
+          const off = r + 9
+          out.push({
+            i, key: n.path,
+            x: n.x + (dx / norm) * off,
+            y: n.y + (dy / norm) * off + 4,
+            anchor: Math.abs(dx / norm) < 0.35 ? 'middle' : (dx > 0 ? 'start' : 'end'),
+            opacity: isNear ? 0.85 : 0.2,
+            text: n.title.length > 12 ? `${n.title.slice(0, 11)}…` : n.title,
+          })
+        }
+        // 同一侧按 y 排开：相邻标签至少留 15px，避免连成一串读不出来
+        for (const side of ['start', 'middle', 'end']) {
+          const grp = out.filter((o) => o.anchor === side).sort((a, b) => a.y - b.y)
+          for (let k = 1; k < grp.length; k++) {
+            if (grp[k].y - grp[k - 1].y < 15) grp[k].y = grp[k - 1].y + 15
+          }
+        }
+        return out
+      })()
+
       return h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6 } },
         h('div', { style: { position: 'relative' } },
         h('svg', {
@@ -788,10 +950,14 @@ window.__ModuleLoader__.load({
             links.map((l, i) => {
               const a = byPath.get(l.a), b = byPath.get(l.b)
               if (!a || !b) return null
-              const dim = hover && !(l.a === hover || l.b === hover)
-              // 起点浓、终点淡：靠近来源的一头更实，指出去的一头渐隐
-              const from = hover ? (dim ? 0.06 : 0.95) : 0.62
-              const to = hover ? (dim ? 0.004 : 0.08) : 0.02
+              const st = EDGE_VISUAL[l.type] ?? EDGE_FALLBACK
+              const on = hover && (l.a === hover || l.b === hover)
+              const dim = hover && !on
+              // 起点浓、终点淡：靠近来源的一头更实，指出去的一头渐隐。
+              // 整体再乘以该类型的视觉权重，让 causal 实、semantic 淡。
+              const base = st.o * EDGE_STRENGTH
+              const from = dim ? base * 0.07 : on ? Math.min(1, base * 1.45) : base
+              const to = from * 0.05
               return h('linearGradient', {
                 key: `g${i}`, id: `edge-${i}`, gradientUnits: 'userSpaceOnUse',
                 x1: a.x, y1: a.y, x2: b.x, y2: b.y,
@@ -800,25 +966,41 @@ window.__ModuleLoader__.load({
                 h('stop', { offset: '100%', stopColor: colorOf(l.type), stopOpacity: to }))
             }),
             nodes.map((n, i) => h('radialGradient', { key: `ng${i}`, id: `node-${i}` },
-              h('stop', { offset: '0%', stopColor: nodeColor(n.type), stopOpacity: 1 }),
-              h('stop', { offset: '70%', stopColor: nodeColor(n.type), stopOpacity: 0.78 }),
-              h('stop', { offset: '100%', stopColor: nodeColor(n.type), stopOpacity: 0.5 })))),
+              h('stop', { offset: '0%', stopColor: nodeColor(n.type), stopOpacity: 0.92 }),
+              h('stop', { offset: '70%', stopColor: nodeColor(n.type), stopOpacity: 0.58 }),
+              h('stop', { offset: '100%', stopColor: nodeColor(n.type), stopOpacity: 0.42 })))),
+          h('g', {
+            transform: `translate(${W / 2} ${H / 2}) scale(${0.88 + 0.12 * enter}) translate(${-W / 2} ${-H / 2})`,
+            style: { opacity: enter },
+          },
+          h('g', { ref: linkGroupRef, style: { willChange: 'opacity' } },
           links.map((l, i) => {
             const a = byPath.get(l.a), b = byPath.get(l.b)
             if (!a || !b) return null
             const dim = hover && !(l.a === hover || l.b === hover)
-            return h('line', {
-              key: `l${i}`, x1: a.x, y1: a.y, x2: b.x, y2: b.y,
+            const st = EDGE_VISUAL[l.type] ?? EDGE_FALLBACK
+            const on = hover && (l.a === hover || l.b === hover)
+            // 微弯：中点沿垂直方向偏 8%，让交叉的线在视觉上分开而不是叠成一根
+            const mx = (a.x + b.x) / 2 + (b.y - a.y) * 0.08
+            const my = (a.y + b.y) / 2 - (b.x - a.x) * 0.08
+            return h('path', {
+              key: `l${i}`, ref: (el) => { linkRefs.current[i] = el },
+              d: `M${a.x} ${a.y} Q${mx} ${my} ${b.x} ${b.y}`,
+              fill: 'none',
               stroke: `url(#edge-${i})`,
-              strokeWidth: hover && !dim ? 2 : 1,
+              strokeWidth: on ? st.w * 1.5 : st.w,
+              strokeDasharray: st.dash || undefined,
+              strokeLinecap: 'round',
             })
-          }),
+          })),
           nodes.map((n, i) => {
-            const r0 = 5 + Math.min(6, n.degree * 1.4)
-            const r = hover && !near(n.path) ? r0 * 0.7 : r0
-            const dim = !near(n.path)
+            const isNear = near(n.path)
+            const r0 = n.r0
+            const r = hover ? (isNear ? r0 * 1.06 : r0 * 0.72) : r0
+            const dim = !isNear
             return h('g', {
-              key: n.path, style: { cursor: 'pointer' },
+              key: n.path, ref: (el) => { nodeRefs.current[i] = el },
+              style: { cursor: 'pointer' },
               onMouseDown: (e) => e.stopPropagation(),
               onMouseEnter: () => setHover(n.path), onMouseLeave: () => setHover(null),
               onClick: () => onSelect(n.path, {
@@ -831,20 +1013,24 @@ window.__ModuleLoader__.load({
               fill: 'currentColor', opacity: 0.12,
             }) : null,
             h('circle', {
+              ref: (el) => { circleRefs.current[i] = el },
               cx: n.x, cy: n.y, r,
               fill: `url(#node-${i})`,
               opacity: dim ? 0.5 : 1,
               stroke: selected === n.path ? '#5b8ff9' : 'CanvasText',
               strokeWidth: selected === n.path ? 2 : 0.6,
               strokeOpacity: selected === n.path ? 1 : 0.25,
-            }),
-            (hover ? !near(n.path) : view.k < 0.85) ? null : h('text', {
-              x: n.x, y: n.y < 40 ? n.y + r + 13 : n.y - r - 6,
-              textAnchor: 'middle', fontSize: 11, fill: 'currentColor',
-              opacity: dim ? 0.2 : 0.85, style: { pointerEvents: 'none' },
-              stroke: 'Canvas', strokeWidth: 3, paintOrder: 'stroke',
-            }, n.title.length > 12 ? `${n.title.slice(0, 11)}…` : n.title))
-          }))),
+            }))
+          }),
+          // 标签单独一层：和圆点分开画，否则后画的节点会盖住先画的字。
+          // 默认缩放下只标枢纽（6 个），75 个标签全铺开会把图糊死。
+          labelItems.map((it) => h('text', {
+            key: `t${it.key}`, ref: (el) => { labelRefs.current[it.i] = el },
+            x: it.x, y: it.y, textAnchor: it.anchor,
+            fontSize: 11, fill: 'currentColor',
+            opacity: it.opacity, style: { pointerEvents: 'none' },
+            stroke: 'Canvas', strokeWidth: 3, paintOrder: 'stroke',
+          }, it.text))))),
         h('div', { style: S.zoomBar },
           h('button', {
             style: S.zoomBtn, onClick: () => zoomBy(1 / 1.25),
@@ -855,12 +1041,27 @@ window.__ModuleLoader__.load({
           h('button', {
             style: { ...S.zoomBtn, fontSize: 11, padding: '3px 7px' },
             onClick: () => setView({ k: 1, x: 0, y: 0 }), title: '回到 100%', 'aria-label': '回到 100%',
-          }, '重置'))),
+          }, '重置'),
+          h('button', {
+            style: { ...S.zoomBtn, fontSize: 11, padding: '3px 7px' },
+            onClick: toggleMotion,
+            title: motion ? '暂停环境漂移' : '恢复环境漂移',
+            'aria-label': motion ? '暂停环境漂移' : '恢复环境漂移',
+            'aria-pressed': motion,
+          }, motion ? '暂停漂移' : '恢复漂移'))),
         h('div', { style: { display: 'flex', gap: 10, flexWrap: 'wrap', fontSize: 11, opacity: 0.6 } },
           h('span', { style: { opacity: 0.55 } }, t('legendLine')),
-          types.map((ty) => h('span', { key: ty, style: { display: 'inline-flex', alignItems: 'center', gap: 4 } },
-            h('span', { style: { width: 8, height: 8, borderRadius: 4, background: colorOf(ty), display: 'inline-block' } }),
-            TYPE_LABEL[ty] ?? ty))),
+          types.map((ty) => {
+            const st = EDGE_VISUAL[ty] ?? EDGE_FALLBACK
+            return h('span', { key: ty, style: { display: 'inline-flex', alignItems: 'center', gap: 5 } },
+              h('svg', { width: 20, height: 8, 'aria-hidden': true, style: { overflow: 'visible' } },
+                h('line', {
+                  x1: 0, y1: 4, x2: 20, y2: 4, stroke: colorOf(ty),
+                  strokeWidth: st.w, strokeOpacity: Math.min(1, st.o * 1.6),
+                  strokeDasharray: st.dash || undefined, strokeLinecap: 'round',
+                })),
+              TYPE_LABEL[ty] ?? ty)
+          })),
 
         h('div', { style: { display: 'flex', gap: 10, flexWrap: 'wrap', fontSize: 11, opacity: 0.55 } },
           h('span', { style: { opacity: 0.55 } }, t('legendNode')),
@@ -1842,7 +2043,7 @@ window.__ModuleLoader__.load({
         try {
           if (kind === 'points') setPageRows(await getJson('/points'))
           else if (kind === 'relations') {
-            const [rels, list] = await Promise.all([getJson('/relations'), getJson('/list')])
+            const [rels, list] = await Promise.all([getJson('/relations'), getJson('/list?noPages=1')])
             setPageRows(rels); setPageNotes(list)
           } else setPageRows(await getJson('/list'))
         } catch (e) { setErr(String(e.message)) } finally { setPageBusy(false) }

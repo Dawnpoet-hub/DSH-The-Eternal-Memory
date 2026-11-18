@@ -844,7 +844,9 @@ function createHandler() {
         })
       }
       if (req.method === 'GET' && route === 'list') {
-        return send(res, 200, await mem(['list', '--json', ...projArgs]))
+        // 关系图只要「记忆」，不要主题页面：页面是派生视图，连不出边
+        const noPages = q.get('noPages') === '1' ? ['--no-pages'] : []
+        return send(res, 200, await mem(['list', '--json', ...projArgs, ...noPages]))
       }
       if (req.method === 'GET' && route === 'note') {
         const rel = q.get('path')
