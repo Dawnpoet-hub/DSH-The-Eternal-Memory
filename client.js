@@ -83,6 +83,25 @@ window.__ModuleLoader__.load({
         detailsSub: '花费、命中率、速度这些数字都在这里',
         costToday: '今天估算花费',
         costSub: '只统计「写回」用掉的大模型调用',
+        usageTitle: '消耗',
+        usageMore: '查看详情 →',
+        usageToday: '今天',
+        usageTotal: '累计',
+        costTitle: '消耗明细',
+        costDesc: '「写回」是后台真的调用了模型；「注入」只是把记忆放进对话，不额外花钱',
+        costCalls: '调用次数',
+        costCallUnit: '次',
+        costInputTok: '输入 token',
+        costOutputTok: '输出 token',
+        costLast30: '近 30 天每日花费',
+        costInjectTitle: '注入占用',
+        costInjectDesc: '每轮往对话里放进去的记忆字数，会随对话一起被反复携带',
+        costInjectTimes: '共 {n} 次',
+        costSince: '自 {d} 起',
+        costNoData: '这天没有调用',
+        costCallsUnit: '次调用',
+        costSpend: '花费',
+        costTokInOut: '输入 {i} / 输出 {o} token',
         inputTokens: '输入 token',
         outputTokens: '输出 token',
         hitRate: '召回命中率',
@@ -92,6 +111,11 @@ window.__ModuleLoader__.load({
         writeAvg: '单次耗时',
         last7: '最近 7 天',
         last7Sub: '每天召回与提炼的次数',
+        chartRecall: '召回',
+        chartDistill: '提炼',
+        chartFactsNew: '新增 {n} 条事实',
+        chartTimes: '{n} 次',
+        chartNoActivity: '这天没有记录',
         estimateNote: '按 ¥2/M 输入、¥8/M 输出估算，与真实账单可能有偏差',
         dupSkipped: '去重跳过',
         backfillFacts: '回填产出',
@@ -229,6 +253,25 @@ window.__ModuleLoader__.load({
         detailsSub: 'Cost, hit rate and speed live here',
         costToday: 'Estimated cost today',
         costSub: 'Only model calls for distillation are counted',
+        usageTitle: 'Usage',
+        usageMore: 'Details →',
+        usageToday: 'Today',
+        usageTotal: 'Total',
+        costTitle: 'Usage breakdown',
+        costDesc: '"Distill" makes real model calls; "inject" only places memories into the conversation',
+        costCalls: 'Calls',
+        costCallUnit: '',
+        costInputTok: 'Input tokens',
+        costOutputTok: 'Output tokens',
+        costLast30: 'Daily spend, last 30 days',
+        costInjectTitle: 'Injected context',
+        costInjectDesc: 'Memory characters placed into each conversation, re-sent with every later step',
+        costInjectTimes: '{n} times',
+        costSince: 'since {d}',
+        costNoData: 'No calls this day',
+        costCallsUnit: 'calls',
+        costSpend: 'Spend',
+        costTokInOut: 'Input {i} / output {o} tokens',
         inputTokens: 'Input tokens',
         outputTokens: 'Output tokens',
         hitRate: 'Recall hit rate',
@@ -238,6 +281,11 @@ window.__ModuleLoader__.load({
         writeAvg: 'Avg duration',
         last7: 'Last 7 days',
         last7Sub: 'Recalls and distillations per day',
+        chartRecall: 'Recall',
+        chartDistill: 'Distill',
+        chartFactsNew: '{n} new facts',
+        chartTimes: '{n}x',
+        chartNoActivity: 'No activity',
         estimateNote: 'Estimated at ¥2/M input and ¥8/M output; the real bill may differ',
         dupSkipped: 'Skipped as duplicate',
         backfillFacts: 'From backfill',
@@ -1373,8 +1421,21 @@ window.__ModuleLoader__.load({
     }
 
     // 详细数据：花费、命中率、速度、7 天趋势
-    function DetailData({ t }) {
+    function DetailData({ t, onOpen }) {
       const [m, setM] = useState(null)
+      const [tip, setTip] = useState(null)
+      const chartRef = useRef(null)
+
+      // 7 天柱的悬停浮层（与消耗柱状图同一套写法，不用原生 title）
+      const showTip = (e, d) => {
+        const el = chartRef.current
+        if (!el) return
+        const rect = el.getBoundingClientRect()
+        const [mm, dd] = d.day.split('-')
+        const raw = e.clientX - rect.left
+        const x = Math.min(Math.max(raw, 72), Math.max(72, rect.width - 72))
+        setTip({ x, y: e.clientY - rect.top, day: `${Number(mm)}月${Number(dd)}日`, ...d })
+      }
 
       useEffect(() => {
         let alive = true
@@ -1396,40 +1457,208 @@ window.__ModuleLoader__.load({
 
       const days = m?.days ?? []
       const maxD = Math.max(1, ...days.map((d) => d.inject + d.distill))
-      const today = m?.cost?.today
-      const cost = today == null ? '—' : `¥${today < 0.01 ? today.toFixed(4) : today.toFixed(2)}`
+      const u = m?.usage
+      const fmtY = (v) => (v == null ? '—' : `¥${v < 0.01 ? v.toFixed(4) : v.toFixed(2)}`)
+      const todayCost = fmtY(u?.today?.cost ?? m?.cost?.today)
+      const totalCost = fmtY(u?.total?.cost)
+      const tokIn = (u?.today?.input ?? m?.cost?.inputTokens ?? 0).toLocaleString('zh-CN')
+      const tokOut = (u?.today?.output ?? m?.cost?.outputTokens ?? 0).toLocaleString('zh-CN')
 
       return h('div', { style: { display: 'flex', flexDirection: 'column', gap: 10 } },
         h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 8 } },
-          box(t('costToday'), cost, t('costSub')),
+          // 花费与 token 同属「消耗」，合成一张卡做入口，细节进弹层
+          h('div', {
+            style: { ...S.card, cursor: 'pointer' },
+            role: 'button', tabIndex: 0,
+            title: t('costDesc'),
+            onClick: () => onOpen && onOpen('cost'),
+            onKeyDown: (e) => {
+              if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen && onOpen('cost') }
+            },
+          },
+            h('div', { style: { display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 } },
+              h('div', { style: S.statLabel }, t('usageTitle')),
+              h('span', { style: { fontSize: 11.5, opacity: 0.62 } }, t('usageMore'))),
+            h('div', { style: { display: 'flex', alignItems: 'baseline', gap: 14, marginTop: 4, flexWrap: 'wrap' } },
+              h('div', null,
+                h('div', { style: S.statValue }, todayCost),
+                h('div', { style: S.statSub }, t('usageToday'))),
+              h('div', null,
+                h('div', { style: { fontSize: 18, fontWeight: 620, letterSpacing: '-0.01em' } }, totalCost),
+                h('div', { style: S.statSub }, t('usageTotal')))),
+            h('div', { style: { ...S.statSub, marginTop: 4 } },
+              `${t('costInputTok')} ${tokIn} · ${t('costOutputTok')} ${tokOut}`)),
           box(t('hitRate'), m?.recall?.hitRate == null ? '—' : `${m.recall.hitRate}%`, t('hitRateSub')),
           box(t('writeRuns'), String(m?.write?.runs ?? '—'),
-            `${t('writeFacts')} ${m?.write?.facts ?? 0} · ${t('writeAvg')} ${m?.write?.avgMs ?? 0}ms`),
-          box(t('inputTokens'), (m?.cost?.inputTokens ?? 0).toLocaleString('zh-CN'),
-            `${t('outputTokens')} ${(m?.cost?.outputTokens ?? 0).toLocaleString('zh-CN')}`)),
+            `${t('writeFacts')} ${m?.write?.facts ?? 0} · ${t('writeAvg')} ${m?.write?.avgMs ?? 0}ms`)),
 
         h('div', { style: S.card },
           h('div', { style: S.statLabel }, t('last7')),
           h('div', { style: S.statSub }, t('last7Sub')),
-          h('div', { style: { display: 'flex', alignItems: 'flex-end', gap: 8, height: 72, marginTop: 10 } },
+          h('div', {
+            ref: chartRef,
+            style: { position: 'relative', display: 'flex', alignItems: 'flex-end', gap: 8, height: 72, marginTop: 10 },
+          },
             days.map((d) => h('div', {
               key: d.day,
-              style: { flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 },
+              onMouseEnter: (e) => showTip(e, d),
+              onMouseMove: (e) => showTip(e, d),
+              onMouseLeave: () => setTip(null),
+              style: {
+                flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3,
+                cursor: (d.inject || d.distill) ? 'pointer' : 'default',
+              },
             },
               h('div', {
-                title: `${d.day} · 召回 ${d.inject} · 提炼 ${d.distill}`,
                 style: { width: '60%', display: 'flex', flexDirection: 'column-reverse', gap: 1, height: 48 },
               },
                 h('div', { style: { height: `${(d.inject / maxD) * 48}px`, borderRadius: 2,
                   background: 'color-mix(in srgb, currentColor 30%, transparent)' } }),
                 h('div', { style: { height: `${(d.distill / maxD) * 48}px`, borderRadius: 2, background: '#5b8ff9' } })),
-              h('span', { style: { fontSize: 10.5, opacity: 0.62 } }, d.day))))),
+              h('span', { style: { fontSize: 10.5, opacity: 0.62 } }, d.day))),
+            tip ? h('div', {
+              style: {
+                position: 'absolute', left: tip.x, top: tip.y - 8,
+                transform: 'translate(-50%, -100%)', pointerEvents: 'none', zIndex: 40,
+                background: '#2b3038', color: '#eef2f7', borderRadius: 8,
+                padding: '7px 10px', fontSize: 12, lineHeight: 1.55, whiteSpace: 'nowrap',
+                boxShadow: '0 8px 22px rgba(0,0,0,.45)',
+              },
+            },
+              h('div', { style: { fontWeight: 600 } }, tip.day),
+              (tip.inject || tip.distill)
+                ? h('div', null,
+                    `${t('chartRecall')} ${t('chartTimes', { n: tip.inject })} · ` +
+                    `${t('chartDistill')} ${t('chartTimes', { n: tip.distill })}`)
+                : h('div', { style: { opacity: 0.75 } }, t('chartNoActivity')),
+              tip.facts
+                ? h('div', { style: { opacity: 0.75 } }, t('chartFactsNew', { n: tip.facts }))
+                : null) : null)),
 
         h('div', { style: { ...S.statSub, display: 'flex', gap: 12, flexWrap: 'wrap' } },
           h('span', null, `${t('dupSkipped')} ${m?.write?.dup ?? 0}`),
           h('span', null, `${t('backfillFacts')} ${m?.write?.backfillFacts ?? 0}`),
           h('span', null, `${t('fallbackCount')} ${m?.write?.fallbacks ?? 0}`)),
         h('div', { style: { ...S.statSub, opacity: 0.62 } }, t('estimateNote')))
+    }
+
+
+    // 消耗明细：花费与 token 的口径、趋势、以及「注入占用」这一块
+    function CostDialog({ t, onClose }) {
+      const [m, setM] = useState(null)
+      const [tip, setTip] = useState(null)
+      const barsRef = useRef(null)
+
+      // 悬停浮层：原生 title 要等一秒且样式不受控，这里自己画（与活跃度热力图一致）
+      const showTip = (e, d) => {
+        const el = barsRef.current
+        if (!el) return
+        const rect = el.getBoundingClientRect()
+        const [mm, dd] = d.day.split('-')   // day 形如 11-18（MM-DD），不是完整日期
+        // 横向夹取：贴近左右边缘时不要把浮层推出弹层外（浮层约 200px 宽，取半宽 100）
+        const raw = e.clientX - rect.left
+        const x = Math.min(Math.max(raw, 100), Math.max(100, rect.width - 100))
+        setTip({
+          x,
+          y: e.clientY - rect.top,
+          day: `${Number(mm)}月${Number(dd)}日`,
+          cost: d.cost, calls: d.calls, input: d.input, output: d.output,
+        })
+      }
+      useEffect(() => {
+        let alive = true
+        getJson('/metrics').then((d) => { if (alive) setM(d) }).catch(() => {})
+        return () => { alive = false }
+      }, [])
+
+      const u = m?.usage
+      const fmtY = (v) => (v == null ? '—' : `¥${v < 0.01 ? v.toFixed(4) : v.toFixed(2)}`)
+      const num = (v) => (v == null ? '—' : Number(v).toLocaleString('zh-CN'))
+      const series = u?.series ?? []
+      const maxCost = Math.max(0.0001, ...series.map((d) => d.cost))
+
+      const mini = (label, value, sub) => h('div', { style: S.card },
+        h('div', { style: S.statValue }, value),
+        h('div', { style: S.statLabel }, label),
+        h('div', { style: S.statSub }, sub))
+
+      return h('div', { style: S.modalWrap, onClick: onClose },
+        h('div', { style: S.modal, onClick: (e) => e.stopPropagation() },
+          h('div', { style: { display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 } },
+            h('div', { style: { minWidth: 0 } },
+              h('div', { style: S.h2 }, t('costTitle')),
+              h('div', { style: S.sub }, t('costDesc'))),
+            h('button', {
+              style: { ...S.btn, padding: '2px 9px' }, onClick: onClose,
+              title: t('close'), 'aria-label': t('close'),
+            }, '✕')),
+
+          // 弹层只有 460px 宽，四张卡固定 2×2，比 auto-fit 更稳
+          h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8, marginTop: 10 } },
+            mini(t('usageToday'), fmtY(u?.today?.cost), t('costCalls') + ' ' + num(u?.today?.calls)),
+            mini(t('usageTotal'),
+              fmtY(u?.total?.cost),
+              u?.total?.since ? t('costSince', { d: u.total.since }) : '—'),
+            mini(t('costInputTok'), num(u?.today?.input), t('usageToday')),
+            mini(t('costOutputTok'), num(u?.today?.output), t('usageToday'))),
+
+          h('div', { style: { ...S.card, marginTop: 8 } },
+            h('div', { style: S.statLabel }, t('costLast30')),
+            h('div', {
+              ref: barsRef,
+              style: { position: 'relative', display: 'flex', alignItems: 'flex-end', gap: 3, height: 56, marginTop: 10 },
+            },
+              series.map((d) => h('div', {
+                key: d.day,
+                onMouseEnter: (e) => showTip(e, d),
+                onMouseMove: (e) => showTip(e, d),
+                onMouseLeave: () => setTip(null),
+                style: {
+                  flex: 1, minWidth: 3, borderRadius: 2,
+                  height: `${Math.max(2, (d.cost / maxCost) * 56)}px`,
+                  background: d.cost > 0 ? '#5b8ff9' : 'color-mix(in srgb, currentColor 14%, transparent)',
+                  cursor: d.cost > 0 ? 'pointer' : 'default',
+                },
+              })),
+              tip ? h('div', {
+                style: {
+                  position: 'absolute', left: tip.x, top: tip.y - 8,
+                  transform: 'translate(-50%, -100%)', pointerEvents: 'none', zIndex: 40,
+                  background: '#2b3038', color: '#eef2f7', borderRadius: 8,
+                  padding: '7px 10px', fontSize: 12, lineHeight: 1.55, whiteSpace: 'nowrap',
+                  boxShadow: '0 8px 22px rgba(0,0,0,.45)',
+                },
+              },
+                h('div', { style: { fontWeight: 600 } }, tip.day),
+                tip.calls
+                  ? h('div', null,
+                      `${t('costSpend')} ${fmtY(tip.cost)} · ${num(tip.calls)} ${t('costCallsUnit')}`)
+                  : h('div', { style: { opacity: 0.75 } }, t('costNoData')),
+                tip.calls
+                  ? h('div', { style: { opacity: 0.75 } },
+                      t('costTokInOut', { i: num(tip.input), o: num(tip.output) }))
+                  : null) : null),
+            h('div', { style: { display: 'flex', justifyContent: 'space-between', ...S.statSub, marginTop: 4 } },
+              h('span', null, series[0]?.day ?? ''),
+              h('span', null, series[series.length - 1]?.day ?? ''))),
+
+          h('div', { style: { ...S.card, marginTop: 8 } },
+            h('div', { style: { display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 } },
+              h('div', { style: S.statLabel }, t('costInjectTitle')),
+              h('span', { style: { ...S.statSub, opacity: 0.8 } },
+                t('costInjectTimes', { n: num(u?.inject?.total?.count ?? 0) }))),
+            h('div', { style: { display: 'flex', alignItems: 'baseline', gap: 14, marginTop: 4, flexWrap: 'wrap' } },
+              h('div', null,
+                h('div', { style: { fontSize: 18, fontWeight: 620, letterSpacing: '-0.01em' } },
+                  num(u?.inject?.today?.tokens)),
+                h('div', { style: S.statSub }, `${t('usageToday')} · token`)),
+              h('div', null,
+                h('div', { style: { fontSize: 18, fontWeight: 620, letterSpacing: '-0.01em' } },
+                  num(u?.inject?.total?.tokens)),
+                h('div', { style: S.statSub }, `${t('usageTotal')} · token`))),
+            h('div', { style: { ...S.statSub, marginTop: 6 } }, t('costInjectDesc'))),
+
+          h('div', { style: { ...S.statSub, opacity: 0.62, marginTop: 8 } }, t('estimateNote'))))
     }
 
     // 流水线监控：九个环节横向排列，悬停看解释，出问题自动展开原因
@@ -1979,6 +2208,7 @@ window.__ModuleLoader__.load({
       const [err, setErr] = useState('')
       const [moverOpen, setMoverOpen] = useState(false)
       const [modelsOpen, setModelsOpen] = useState(false)
+      const [costOpen, setCostOpen] = useState(false)
       const [reloadKey, setReloadKey] = useState(0)
       const [, forceTick] = useState(0)
       useEffect(() => {
@@ -2155,10 +2385,13 @@ window.__ModuleLoader__.load({
               onClick: () => openPage('recent'),
             })),
           h(Heatmap, { t }))
-          : h(DetailData, { t })),
+          : h(DetailData, { t, onOpen: (k) => { if (k === 'cost') setCostOpen(true) } })),
 
         modelsOpen ? h(ModelDialog, {
           t, onClose: () => setModelsOpen(false),
+        }) : null,
+        costOpen ? h(CostDialog, {
+          t, onClose: () => setCostOpen(false),
         }) : null,
 
         moverOpen ? h(MoverDialog, {

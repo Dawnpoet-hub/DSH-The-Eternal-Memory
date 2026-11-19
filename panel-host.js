@@ -411,6 +411,16 @@ function estimateTokens(chars, facts) {
   return { input, output, cost: input * PRICE.input + output * PRICE.output }
 }
 
+// 日期标签必须按本地时区取：new Date(本地零点).toISOString() 会退到前一天 UTC
+function localDayLabel(ts) {
+  const d = new Date(ts)
+  return `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+function localDateLabel(ts) {
+  return `${new Date(ts).getFullYear()}-${localDayLabel(ts)}`
+}
+
 function buildMetrics() {
   const events = readLog(20000).filter((e) => e && e.ev)
   const dayStart = new Date().setHours(0, 0, 0, 0)
@@ -432,6 +442,37 @@ function buildMetrics() {
   const backfill = readJson('backfill.json', { done: {} })
   const backfillFacts = Object.values(backfill.done ?? {}).reduce((n, v) => n + (v.facts ?? 0), 0)
 
+  // 消耗：写回（提炼时真的调用了模型）与注入（占用主对话上下文，不额外调用）
+  const sumTok = (arr) => arr.reduce((acc, e) => {
+    const t = estimateTokens(e.chars, e.facts)
+    acc.input += t.input
+    acc.output += t.output
+    acc.cost += t.cost
+    acc.calls += 1
+    return acc
+  }, { input: 0, output: 0, cost: 0, calls: 0 })
+  const allDistills = events.filter((e) => e.ev === 'distill')
+  const allInjects = events.filter((e) => e.ev === 'inject')
+  const injCharsAll = allInjects.reduce((n, e) => n + (e.chars ?? 0), 0)
+  const injCharsToday = allInjects.filter((e) => e.t >= dayStart).reduce((n, e) => n + (e.chars ?? 0), 0)
+  const uToday = sumTok(allDistills.filter((e) => e.t >= dayStart))
+  const uTotal = sumTok(allDistills)
+
+  // 近 30 天逐日花费（默认 30 天窗口，够看出趋势又不至于挤成一条线）
+  const spendDays = []
+  for (let i = 29; i >= 0; i--) {
+    const start = new Date().setHours(0, 0, 0, 0) - i * 86400000
+    const end = start + 86400000
+    const t = sumTok(allDistills.filter((e) => e.t >= start && e.t < end))
+    spendDays.push({
+      day: localDayLabel(start),
+      cost: Number(t.cost.toFixed(4)),
+      input: t.input,
+      output: t.output,
+      calls: t.calls,
+    })
+  }
+
   // 最近 7 天：召回 / 提炼
   const days = []
   for (let i = 6; i >= 0; i--) {
@@ -439,7 +480,7 @@ function buildMetrics() {
     const end = start + 86400000
     const inDay = events.filter((e) => e.t >= start && e.t < end)
     days.push({
-      day: new Date(start).toISOString().slice(5, 10),
+      day: localDayLabel(start),
       inject: inDay.filter((e) => e.ev === 'inject').length,
       distill: inDay.filter((e) => e.ev === 'distill').length,
       facts: inDay.filter((e) => e.ev === 'distill').reduce((n, d) => n + (d.facts ?? 0), 0),
@@ -454,6 +495,20 @@ function buildMetrics() {
   } catch { /* ignore */ }
   return {
     updatedAt: Date.now(),
+    usage: {
+      today: { ...uToday, cost: Number(uToday.cost.toFixed(4)) },
+      total: {
+        ...uTotal,
+        cost: Number(uTotal.cost.toFixed(2)),
+        since: allDistills.length ? localDateLabel(allDistills[0].t) : null,
+      },
+      series: spendDays,
+      inject: {
+        today: { chars: injCharsToday, tokens: Math.round(injCharsToday * CHARS_PER_TOKEN) },
+        total: { chars: injCharsAll, tokens: Math.round(injCharsAll * CHARS_PER_TOKEN), count: allInjects.length },
+        todayCount: allInjects.filter((e) => e.t >= dayStart).length,
+      },
+    },
     cost: {
       today: Number(tok.cost.toFixed(4)),
       inputTokens: tok.input,
