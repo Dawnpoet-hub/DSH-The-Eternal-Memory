@@ -372,13 +372,6 @@ async function buildPipeline() {
       metric: lastDistill?.model ?? '—',
     },
     {
-      key: 'pages', title: '主题页面', sub: '把同一主题的结论合成一页',
-      state: lastPage ? 'ok' : 'idle',
-      detail: lastPage ? `最近重建 ${ago(lastPage.t)}：${lastPage.label}（${lastPage.facts} 条事实）` : '每 10 轮重建一次，还没到',
-      fix: null,
-      metric: lastPage ? lastPage.label : '未生成',
-    },
-    {
       key: 'backfill', title: '历史回填', sub: '把以前的对话补进记忆',
       state: backfillDone >= backfillTotal ? 'ok' : (backfillDone > 0 ? 'idle' : 'warn'),
       detail: `已完成 ${backfillDone} / ${backfillTotal} 个历史会话`,

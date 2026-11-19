@@ -42,7 +42,7 @@ window.__ModuleLoader__.load({
         importedList: '这次进来的记忆：',
         again: '再来一次',
         project: '项目', allProjects: '全部项目',
-        pipelineHint: '整个插件的九个环节，哪一步卡住一眼就能看到',
+        pipelineHint: '整个插件的 {n} 个环节，哪一步卡住一眼就能看到',
         stateOk: '正常', stateWarn: '需注意', stateFail: '故障', stateIdle: '待触发',
         overallOk: '一切正常', overallWarn: '{n} 项需注意', overallFail: '{n} 项故障',
         fixHint: '怎么修', clickHint: '点开看细节',
@@ -135,6 +135,8 @@ window.__ModuleLoader__.load({
         checkTitle: '健康检查',
         checkRunning: '检查中…',
         checkOk: '没有发现问题',
+        checkOkButWarn: '库结构没有发现问题；另有 {n} 个环节需注意（见下）',
+        checkRunWarn: '运行状态需注意（{n}）',
         checkHint: '点一下检查记忆库有没有格式错误、断掉的链接或漏掉的文件',
         checkIssues: '发现 {n} 处问题',
         checkMore: '还有 {n} 处…',
@@ -212,7 +214,7 @@ window.__ModuleLoader__.load({
         importedList: 'What came in:',
         again: 'Again',
         project: 'Project', allProjects: 'All projects',
-        pipelineHint: 'The nine stages of this plugin — see at a glance where it is stuck',
+        pipelineHint: 'The {n} stages of this plugin — see at a glance where it is stuck',
         stateOk: 'OK', stateWarn: 'Needs attention', stateFail: 'Broken', stateIdle: 'Waiting',
         overallOk: 'All good', overallWarn: '{n} need attention', overallFail: '{n} broken',
         fixHint: 'How to fix', clickHint: 'Tap for details',
@@ -305,6 +307,8 @@ window.__ModuleLoader__.load({
         checkTitle: 'Health check',
         checkRunning: 'Checking…',
         checkOk: 'No problems found',
+        checkOkButWarn: 'Library structure is fine; {n} stage(s) need attention (below)',
+        checkRunWarn: 'Stages needing attention ({n})',
         checkHint: 'Tap to check for malformed notes, broken links or missing files',
         checkIssues: '{n} problems found',
         checkMore: '{n} more…',
@@ -1661,7 +1665,7 @@ window.__ModuleLoader__.load({
           h('div', { style: { ...S.statSub, opacity: 0.62, marginTop: 8 } }, t('estimateNote'))))
     }
 
-    // 流水线监控：九个环节横向排列，悬停看解释，出问题自动展开原因
+    // 流水线监控：各环节横向排列（数量随 steps 变化），悬停看解释，出问题自动展开原因
     function PipelinePanel({ t }) {
       const [data, setData] = useState(null)
       const [hover, setHover] = useState(null)
@@ -1707,6 +1711,7 @@ window.__ModuleLoader__.load({
             : '#3f9b6d'
 
       const steps = data?.steps ?? []
+      const warnSteps = steps.filter((x) => x.state === 'warn' || x.state === 'fail')
       const overall = data?.overall ?? 'ok'
       const firstProblem = steps.find((x) => x.state === 'fail') ?? steps.find((x) => x.state === 'warn')
       const activeKey = hover ?? pinned ?? firstProblem?.key ?? null
@@ -1720,7 +1725,7 @@ window.__ModuleLoader__.load({
         h('div', { style: { display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 } },
           h('div', { style: { minWidth: 0 } },
             h('div', { style: S.h2 }, t('status')),
-            h('div', { style: S.sub }, t('pipelineHint'))),
+            h('div', { style: S.sub }, t('pipelineHint', { n: steps.length }))),
           h('div', { style: { position: 'relative', flex: 'none' } },
             h('button', {
               onClick: runCheck, title: t('checkHint'),
@@ -1756,13 +1761,14 @@ window.__ModuleLoader__.load({
                   health.error
                     ? h('div', { style: { fontSize: 11, color: '#d08a3a' } }, health.error)
                     : problems.length === 0
-                      ? h('div', { style: { fontSize: 11.5, opacity: 0.7 } }, t('checkOk'))
+                      ? h('div', { style: { fontSize: 11.5, opacity: 0.7 } },
+                          warnSteps.length ? t('checkOkButWarn', { n: warnSteps.length }) : t('checkOk'))
                       : h('div', null,
                           h('div', { style: { fontSize: 11.5, opacity: 0.85 } },
                             t('checkIssues', { n: problems.length })),
                           h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3, marginTop: 6 } },
                             problems.slice(0, 6).map((pr, i) => h('div', {
-                              key: i, style: { fontSize: 11, opacity: 0.7, lineHeight: 1.5 },
+                              key: i, style: { fontSize: 11, opacity: 0.7, lineHeight: 1.5, wordBreak: 'break-word', overflowWrap: 'anywhere' },
                             },
                               h('span', { style: { opacity: 0.55 } },
                                 `[${t({ schema: 'catSchema', orphans: 'catOrphans', unindexed: 'catUnindexed', missing: 'catMissing' }[pr.kind] ?? 'catSchema')}] `),
@@ -1770,7 +1776,15 @@ window.__ModuleLoader__.load({
                           problems.length > 6
                             ? h('div', { style: { fontSize: 11, opacity: 0.62, marginTop: 2 } },
                                 t('checkMore', { n: problems.length - 6 }))
-                            : null))
+                            : null),
+                  warnSteps.length
+                    ? h('div', { style: { borderTop: '1px solid color-mix(in srgb, currentColor 14%, transparent)', paddingTop: 6, display: 'flex', flexDirection: 'column', gap: 3 } },
+                        h('div', { style: { fontSize: 11, opacity: 0.62 } }, t('checkRunWarn', { n: warnSteps.length })),
+                        warnSteps.map((st) => h('div', { key: st.key, style: { fontSize: 11, lineHeight: 1.5, wordBreak: 'break-word', overflowWrap: 'anywhere' } },
+                          h('span', { style: { fontWeight: 600 } }, `${st.title}：`),
+                          st.detail ?? '',
+                          st.fix ? h('span', { style: { opacity: 0.62 } }, ` · ${st.fix}`) : null)))
+                    : null)
               : null)),
 
         // 横向步骤条：放不下就左右滑动（右侧渐隐提示还有更多）
@@ -2369,11 +2383,6 @@ window.__ModuleLoader__.load({
             h(Field, {
               value: overview?.obs ?? '—', label: t('points'), sub: t('pointsSub'),
               onClick: () => openPage('points'),
-            }),
-            h(Field, {
-              value: (overview?.by_type ?? []).find((x) => x.key === 'page')?.count ?? 0,
-              label: t('pagesTitle'), sub: t('pagesSub'),
-              onClick: () => openPage('pages'),
             }),
             h(Field, {
               value: overview?.rel ?? '—', label: t('links'), sub: t('linksSub'),

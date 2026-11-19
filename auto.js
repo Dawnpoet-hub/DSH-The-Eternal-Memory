@@ -41,11 +41,7 @@ const GATE_TIMEOUT_MS = Number(process.env.MEM_AUTO_GATE_TIMEOUT ?? 8000)
 const CHUNK_CHARS = 12_000       // 与 Hindsight 的 retain_chunk_size 一致
 const MAX_CHUNKS = 3
 const MAX_ITEMS = 8
-const PAGE_EVERY = Number(process.env.MEM_AUTO_PAGE_EVERY ?? 10)
-let pendingPageRebuild = false
-let lastSyncAt = 0   // 上次同步 DSH 工作区的时间（新工作区创建后要尽快登记）   // 用户要求「重建主题页面」时置位，在 turn-stopping 里执行   // 每多少轮重建一次页面
-const PAGE_MIN_FACTS = 3
-const PAGES_DIR = path.join(MEM, 'pages')
+let lastSyncAt = 0   // 上次同步 DSH 工作区的时间（新工作区创建后要尽快登记）
 const DISTILL_TIMEOUT = 120_000
 // 模型不写死：优先环境变量，其次从 DSH 已注册的 provider/模型里挑 deepseek
 const MODEL_ENV = { provider: process.env.MEM_LLM_PROVIDER, model: process.env.MEM_LLM_MODEL }
@@ -121,7 +117,7 @@ function ask(req, ms = TIMEOUT_MS) {
         proc = spawn(pyNow(), [SERVE], { cwd: WS, stdio: ['pipe', 'pipe', 'pipe'] })
         proc.stderr.on('data', () => {})
         proc.on('error', (e) => {
-          note({ ev: 'spawn_error', err: String(e).slice(0, 120) })
+          note({ ev: 'spawn_error', err: String(e).slice(0, 240) })
           proc = null
           for (const q of queue) q.settle(null)
           queue = []
@@ -423,25 +419,62 @@ async function callModelAuto(ctx, llm, system, user) {
       return await callModel(pick, llm, system, user)
     } catch (e) {
       lastErr = e
-      note({ ev: 'model_try_fail', where: 'auto', provider: pick.provider, model: pick.model, err: String(e).slice(0, 120) })
+      note({ ev: 'model_try_fail', where: 'auto', provider: pick.provider, model: pick.model, err: String(e).slice(0, 240) })
     }
   }
   throw lastErr ?? new Error('no llm candidate')
 }
 
 async function callModel(pick, llm, system, user) {
+  // 逐级降级：某些请求在部分 DSH 版本上会被服务端以 INVALID_REQUEST / TRANSPORT 拒掉，
+  // 而同一模型的简单请求正常。这里按「完整 → 去 system → 截断正文」三档重试，
+  // 成功时记下用了哪一档，便于定位；三档都失败才抛出最后一档的错误。
+  // 实测（2026-11-19，DSH 0.2.2-rc.5）：
+  //   ① 带 system 角色的请求会被服务端拒掉（INVALID_REQUEST），只有 user 消息通过；
+  //   ② 但丢掉规则，模型就不知道输出格式（提炼出 0 条）；
+  //   ③ 规则+材料的合并报文在**较长**时又被拒（短的自检能通）。
+  // 所以分四档，且截断只截材料、**绝不截规则**：
+  const build = (material) => (system ? `【规则】\n${system}\n\n【材料】\n${material}` : material)
+  const attempts = [
+    { tag: 'merged', system: '', user: build(user) },
+    { tag: 'merged-trim', system: '', user: build(String(user).slice(-4000)) },
+    { tag: 'merged-tiny', system: '', user: build(String(user).slice(-1500)) },
+    { tag: 'no-rules', system: '', user: String(user).slice(-4000) },
+  ]
+  let lastErr = null
+  for (const a of attempts) {
+    try {
+      const r = await streamOnce(pick, llm, a.system, a.user)
+      if (a.tag !== 'full') note({ ev: 'model_degraded', tag: a.tag, provider: pick.provider, model: pick.model })
+      return r
+    } catch (e) {
+      lastErr = e
+      if (a.tag !== 'full') note({ ev: 'model_degraded_fail', tag: a.tag, err: String(e).slice(0, 200) })
+    }
+  }
+  throw lastErr ?? new Error('no llm candidate')
+}
+
+// 服务端报过 "unexpected end of hex escape"：按字符位置切串会把 emoji/代理对切成
+// 孤立的高位或低位代理，序列化成 \uD83D 这种残缺转义，整个报文被判非法 JSON。
+// 所有送出去的文本都要先净化。
+function sanitizeText(t) {
+  return String(t ?? '')
+    .replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/g, '')      // 孤立高位代理
+    .replace(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '')      // 孤立低位代理
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, ' ') // 控制字符
+}
+
+async function streamOnce(pick, llm, system, user) {
   if (!pick) throw new Error('no llm candidate')
   const parts = []
+  const messages = []
+  if (system) messages.push({ role: 'system', content: [{ type: 'text', text: sanitizeText(system) }] })
+  messages.push({ role: 'user', content: [{ type: 'text', text: sanitizeText(user) }] })
   let usage = null
   let finish = null
   const unknown = new Set()
-  for await (const chunk of llm.stream({
-    provider: pick.provider, model: pick.model,
-    messages: [
-      { role: 'system', content: [{ type: 'text', text: system }] },
-      { role: 'user', content: [{ type: 'text', text: user }] },
-    ],
-  })) {
+  for await (const chunk of llm.stream({ provider: pick.provider, model: pick.model, messages })) {
     const type = chunk?.type
     if (type === 'text-delta' && typeof chunk.text === 'string') parts.push(chunk.text)
     else if (type === 'usage') usage = chunk.usage ?? chunk
@@ -453,9 +486,12 @@ async function callModel(pick, llm, system, user) {
   }
   const text = parts.join('')
   if (!text.trim()) {
-    // 静默空输出是最危险的：会被当成"这次没提炼出事实"
-    throw new Error(`empty model output (provider=${pick.provider} model=${pick.model}`
-      + ` finish=${JSON.stringify(finish ?? {}).slice(0, 160)})`)
+    const kind = finish?.reason?.kind
+    const failure = finish?.reason?.failure
+    const detail = kind === 'error'
+      ? `adapter-error ${(failure?.code ?? '')} ${String(failure?.message ?? '').slice(0, 160)}`.trim()
+      : `finish=${kind ?? '?'} parts=${parts.length}`
+    throw new Error(`empty model output (${pick.provider}/${pick.model}) ${detail}`)
   }
   return { text, usage }
 }
@@ -499,6 +535,18 @@ function projectForRoot(root) {
   return path.basename(target) || 'main'
 }
 
+// 笔记类型按「第一条观察的类别」决定，不直接信模型给的 type：
+// 模型可能给 type=decision 而 category=事实，写出来的笔记就变成
+// 「decision 类型但没有一条 [决定]」，体检会报错（schema 要求 decision 至少一条决定）。
+function typeForCategory(cat, hint) {
+  const c = String(cat || '').trim()
+  if (c === '决定') return 'decision'
+  if (c === '环境') return 'environment'
+  if (c === '原则' || c === '偏好') return 'principles'
+  if (c === '事实' || c === '约束' || c === '原因' || c === '过程') return 'note'
+  return ['decision', 'environment', 'principles'].includes(hint) ? hint : 'note'
+}
+
 function appendFact(fact, refId, root = MEM) {
   const title = String(fact.note || fact.type || '自动记忆').trim()
   const file = path.join(root, `${slugify(title)}.md`)
@@ -529,7 +577,7 @@ function appendFact(fact, refId, root = MEM) {
     return true
   }
 
-  const type = ['decision', 'environment', 'principles'].includes(fact.type) ? fact.type : 'environment'
+  const type = typeForCategory(cat, fact.type)
   fs.writeFileSync(file, [
     '---',
     `title: ${title}`,
@@ -572,7 +620,7 @@ async function gateCheck(facts) {
     if (data.error || !Array.isArray(data.results)) return null
     return data.results
   } catch (e) {
-    note({ ev: 'gate_error', err: String(e).slice(0, 120) })
+    note({ ev: 'gate_error', err: String(e).slice(0, 240) })
     return null
   }
 }
@@ -618,118 +666,6 @@ async function writeFacts(facts, refId, seen, root = MEM) {
   return { written, dup, gated }
 }
 
-
-// ---------------- 项目页面（对齐 Hindsight 的 pages） ----------------
-
-const PAGE_PROMPT = `你在维护一份「项目页面」：把这个主题**现在**的状态写成一段连贯的东西，供以后直接阅读。
-
-规则：
-1. 只写当前生效的结论。被推翻的旧方案放进「曾经考虑过」，一句话带过，不要展开。
-2. 具体数值、颜色值、尺寸、文件路径、接口名、命令，**原样保留**，不许改写或概括。
-3. 不要编造材料里没有的东西；材料没覆盖的就不写。
-4. 用简洁的中文短句，不要营销腔，不要"综上所述"。
-5. 不要写一级标题（系统会加）。第一行必须是 SUMMARY: 加一句不超过 80 字的中文摘要（讲这一页整体是什么），然后空一行，再输出下面三节：
-
-## 现在是什么
-（这个主题当前的事实状态，3–6 条）
-
-## 定死的规则
-（不能违反的约束，逐条列出；没有就写"暂无"）
-
-## 曾经考虑过
-（被否决或已过时的方案，每条一句；没有就写"暂无"）`
-
-// 与 Hindsight 对齐：页面不是聚类出来的，而是一份固定清单，
-// 每页由一个「检索问题」驱动 —— 先用这个问题去记忆库找材料，再让模型写成页面。
-const PAGE_TAXONOMY = [
-  { name: '组件地图', query: '这个项目有哪些主要模块、组件或子系统，各自负责什么，彼此怎么关联或依赖？' },
-  { name: '核心理念', query: '这个项目的核心概念、领域术语和关键实体是什么，各自代表什么？' },
-  { name: '约定与模式', query: '这个项目遵循哪些约定、习惯和固定做法（结构、命名、错误处理、测试方式）？' },
-  { name: '关键决定与理由', query: '这个项目做过哪些重要决定，理由是什么，为什么不是另一种做法？' },
-  { name: '功能与改进', query: '这个项目做了哪些主要功能、改进和迭代，随时间有什么变化？' },
-]
-
-/** 旧版：按标题聚类（已不再使用，保留供参考） */
-function collectPages(root = MEM) {
-  const pages = new Map()
-  let files = []
-  try { files = fs.readdirSync(root).filter((f) => f.endsWith('.md')) } catch { return pages }
-  for (const f of files) {
-    const file = path.join(MEM, f)
-    const body = fs.readFileSync(file, 'utf8')
-    const title = (body.match(/^title:\s*(.+)$/m)?.[1] ?? f.replace(/\.md$/, '')).trim()
-    for (const m of body.matchAll(/^-\s*\[([^\]]+)\]\s*(.+?)\s*\((.*?)\)\s*$/gm)) {
-      const pm = m[3].match(/page:([^·]+)/)
-      if (!pm) continue
-      const label = pm[1].trim()
-      if (!label) continue
-      if (!pages.has(label)) pages.set(label, [])
-      pages.get(label).push({ cat: m[1], text: m[2], source: title })
-    }
-  }
-  return pages
-}
-
-function pageFile(label, root = MEM) {
-  const slug = String(label).trim().replace(/[\\/:*?"<>|\s]+/g, '-').slice(0, 40) || 'page'
-  return path.join(root, 'pages', `${slug}.md`)
-}
-
-async function rebuildPages(ctx, llm, root = MEM, project = null) {
-  const today = new Date().toISOString().slice(0, 10)
-  let rebuilt = 0
-  for (const page of PAGE_TAXONOMY) {
-    let hits = []
-    try {
-      const raw = await ask({ op: 'search', q: page.query, n: 24, ...(project ? { project } : {}) })
-      hits = JSON.parse(raw ?? '{}').hits ?? []
-    } catch (e) {
-      note({ ev: 'page_search_fail', label: page.name, err: String(e).slice(0, 120) })
-      continue
-    }
-    // 过程类不进主题页面：页面写的是「这个主题现在是什么样」，过程是当时的动作，会过期
-    const facts = hits.filter((h) => h.kind === 'obs' && h.cat !== '过程').slice(0, 24)
-    if (facts.length < PAGE_MIN_FACTS) {
-      note({ ev: 'page_skip', label: page.name, n: facts.length })
-      continue
-    }
-    const user = [`主题：${page.name}`, '', '材料：']
-      .concat(facts.map((f) => `- [${f.cat ?? '事实'}] ${f.text}（来源：${f.title ?? f.path}）`))
-      .join('\n')
-    try {
-      const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('page timeout')), DISTILL_TIMEOUT))
-      const res = await Promise.race([callModelAuto(ctx, llm, PAGE_PROMPT, user), timeout])
-      let md = String(res.text).trim()
-      if (md.length < 60) { note({ ev: 'page_empty', label: page.name }); continue }
-      // 第一行 SUMMARY: … 抽出来放进 frontmatter，正文里去掉
-      const sm = md.match(/^SUMMARY[:：]\s*(.+)$/m)
-      const summary = sm ? sm[1].trim().slice(0, 120) : ''
-      if (sm) md = md.replace(sm[0], '').trim()
-      fs.mkdirSync(path.join(root, 'pages'), { recursive: true })
-      fs.writeFileSync(pageFile(page.name, root), [
-        '---',
-        `title: ${page.name}`,
-        'type: page',
-        `project: ${project || projectForRoot(root)}`,
-        'tags: [page]',
-        `created: ${today}`,
-        `summary: ${JSON.stringify(summary)}`,
-        `source_query: ${JSON.stringify(page.query)}`,
-        '---',
-        '',
-        `# ${page.name}`,
-        '',
-        md,
-        '',
-      ].join('\n'))
-      rebuilt += 1
-      note({ ev: 'page_ok', label: page.name, facts: facts.length })
-    } catch (e) {
-      note({ ev: 'page_error', label: page.name, err: String(e).slice(0, 160) })
-    }
-  }
-  return rebuilt
-}
 
 async function distillJsonl(ctx, llm, jsonl, prelude = '') {
   const system = [
@@ -924,7 +860,7 @@ async function backfillOne(ctx) {
            facts: facts.length, written: res.written, dup: res.dup,
            ms: Date.now() - t0, left, usage })
   } catch (e) {
-    note({ ev: 'backfill_error', session: next.id.slice(0, 12), err: String(e).slice(0, 120) })
+    note({ ev: 'backfill_error', session: next.id.slice(0, 12), err: String(e).slice(0, 240) })
     state.done[next.id] = { error: String(e).slice(0, 120) }
     saveBackfill(state)
   }
@@ -971,6 +907,16 @@ async function drainQueue(ctx) {
       // 修：原先写成 distillJsonl(llm, item.jsonl)，参数错位（签名是 ctx, llm, jsonl），
       // 导致失败重放必然抛错、被静默丢弃。
       const { facts } = await distillJsonl(ctx, llm, item.jsonl, item.prelude || '')
+      if (!facts.length) {
+        // 0 条不是「已经处理完」，而是这次没提炼出来（例如提示词被降级掉了）。
+        // 当成功会把内容静默丢掉，所以退回队列等下次重试。
+        item.attempts = (item.attempts || 1)
+        if (item.attempts > MAX_ATTEMPTS) { note({ ev: 'queue_drop', refId: item.refId, err: 'empty-facts' }); continue }
+        item.nextAt = Date.now() + RETRY_BASE_MS * item.attempts
+        keep.push(item)
+        note({ ev: 'queue_empty_facts', attempts: item.attempts })
+        continue
+      }
       const res = await writeFacts(facts, item.refId, new Set(item.seen || []), item.root || MEM)
       ok++
       note({ ev: 'queue_ok', written: res.written })
@@ -1102,14 +1048,6 @@ async function run(ctx, agent, id, force = false) {
     }
     saveState(state)
 
-    // 6 小时兜底：即使没攒够 10 次提炼，页面太旧也会重建
-    const pagesAt = state.pages?.[info.project ?? 'main'] ?? 0
-    const stale = Date.now() - pagesAt > 6 * 3600 * 1000
-    if (PAGE_EVERY > 0 && (turnsCount % PAGE_EVERY === 0 || (stale && pagesAt > 0))) {
-      state.pages = { ...(state.pages ?? {}), [info.project ?? 'main']: Date.now() }
-      saveState(state)
-      rebuildPages(ctx, llm, info.root, info.project).catch((e) => note({ ev: 'page_fail', err: String(e) }))
-    }
     note({ ev: 'distill', ms: Date.now() - t0, project: info.project,
            sid: String(id).slice(0, 12),
            provider: modelPick?.provider, model: modelPick?.model,
@@ -1168,6 +1106,21 @@ function compose(contextText, first) {
 export function apply(ctx) {
   note({ ev: 'plugin_loaded' })
 
+  // 启动自检：发一次最小请求，把「通道问题」和「报文问题」分开。
+  // 通道坏 → selftest 失败；通道好但提炼失败 → 报文/长度/内容问题。
+  setTimeout(async () => {
+    try {
+      const llm = ctx.get ? ctx.get('llm') : undefined
+      if (!llm?.stream) { note({ ev: 'llm_selftest_skip', why: 'no-llm' }); return }
+      const pick = modelPick ?? (await modelCandidates(ctx))[0]
+      if (!pick) { note({ ev: 'llm_selftest_skip', why: 'no-candidate' }); return }
+      const r = await callModel(pick, llm, '只回复两个字：正常', '自检')
+      note({ ev: 'llm_selftest_ok', provider: pick.provider, model: pick.model, chars: r.text.length })
+    } catch (e) {
+      note({ ev: 'llm_selftest_fail', err: String(e).slice(0, 240) })
+    }
+  }, 8000).unref?.()
+
   ctx.on('agent/session-start', (ev) => {
       // 新会话开始时顺手同步一次工作区（60 秒节流），避免新工作区的记忆落到 main
       if (Date.now() - lastSyncAt > 60_000) {
@@ -1211,12 +1164,6 @@ export function apply(ctx) {
 
       const prompt = promptOf(decision.messages)
 
-      // 允许随时手动重建主题页面（不用等攒够 10 轮）
-      if (prompt && /(重建|生成|刷新)\s*(主题)?页面|rebuild\s+pages/i.test(prompt)) {
-        pendingPageRebuild = true
-        note({ ev: 'page_rebuild_requested' })
-      }
-
       if (!prompt || prompt.length < MIN_PROMPT) return decision
       if (prompt.startsWith('/') || prompt.startsWith('[')) return decision
       if (!INJECT_ENABLED) return decision   // 实验/调试：只关注入，其余照常
@@ -1247,14 +1194,6 @@ export function apply(ctx) {
 
   ctx.on('agent/turn-stopping', ({ agent }) => {
     if (!WRITE_ENABLED) return   // 实验/调试：冻结写回，记忆库保持不变
-    if (pendingPageRebuild) {
-      pendingPageRebuild = false
-      const llm = ctx.get ? ctx.get('llm') : undefined
-      projectInfo(agent)
-        .then((info) => rebuildPages(ctx, llm, info.root, info.project))
-        .then((n) => note({ ev: 'page_rebuilt', count: n }))
-        .catch((e) => note({ ev: 'page_fail', err: String(e).slice(0, 200) }))
-    }
     maybeDistill(ctx, agent)
     drainQueue(ctx).catch(() => { /* 重试失败不影响对话 */ })
     backfillStep(ctx).catch(() => { /* 回填失败不影响对话 */ })
