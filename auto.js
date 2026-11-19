@@ -818,6 +818,29 @@ function cwdOf(events) {
 
 let backfillBusy = false
 
+// 回填进度写进 state 的 meta：分母是「当前还在磁盘上的历史会话数」，
+// 分子是其中已经处理过的。原来面板把分母写死成 9、分子按历史累计，
+// 于是出现「已完成 58 / 9」这种自相矛盾的数字。
+function refreshBackfillMeta() {
+  try {
+    const state = loadBackfill()
+    const files = listSessionFiles()
+    const ids = new Set(files.map((x) => x.id))
+    const doneNow = files.filter((x) => {
+      const d = state.done?.[x.id]
+      return d && !d.error && !d.skipped
+    }).length
+    state.meta = {
+      total: files.length,
+      done: doneNow,
+      pending: files.length - doneNow,
+      updatedAt: new Date().toISOString(),
+    }
+    saveBackfill(state)
+    return state.meta
+  } catch { return null }
+}
+
 async function backfillStep(ctx) {
   if (!BACKFILL_ENABLED || backfillBusy) return
   backfillBusy = true
@@ -838,7 +861,7 @@ async function backfillOne(ctx) {
   try {
     const events = readSession(next.file)
     const turns = turnsFromEvents(events)
-    if (turns.length < 4) { state.done[next.id] = { skipped: 'too-short' }; saveBackfill(state); return }
+    if (turns.length < 4) { state.done[next.id] = { skipped: 'too-short' }; saveBackfill(state); refreshBackfillMeta(); return }
 
     const info = await projectInfo({ session: { header: { cwd: cwdOf(events) } } })
     let jsonl = renderJsonl(next.id, turns)
@@ -855,6 +878,7 @@ async function backfillOne(ctx) {
                             facts: facts.length, written: res.written, dup: res.dup,
                             project: info.project, chars: jsonl.length }
     saveBackfill(state)
+    refreshBackfillMeta()
     const left = listSessionFiles().filter((x) => !state.done[x.id]).length
     note({ ev: 'backfill', session: next.id.slice(0, 12), turns: turns.length,
            facts: facts.length, written: res.written, dup: res.dup,
@@ -863,6 +887,7 @@ async function backfillOne(ctx) {
     note({ ev: 'backfill_error', session: next.id.slice(0, 12), err: String(e).slice(0, 240) })
     state.done[next.id] = { error: String(e).slice(0, 120) }
     saveBackfill(state)
+    refreshBackfillMeta()
   }
 }
 
@@ -1108,6 +1133,8 @@ export function apply(ctx) {
 
   // 启动自检：发一次最小请求，把「通道问题」和「报文问题」分开。
   // 通道坏 → selftest 失败；通道好但提炼失败 → 报文/长度/内容问题。
+  try { refreshBackfillMeta() } catch { /* 启动时算一次，面板立刻有真实分母 */ }
+
   setTimeout(async () => {
     try {
       const llm = ctx.get ? ctx.get('llm') : undefined

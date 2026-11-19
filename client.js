@@ -2375,7 +2375,8 @@ window.__ModuleLoader__.load({
                 }, label)))),
 
           tab === 'overview' ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 10 } },
-          h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 } },
+          // 一排两个：四张卡片正好 2×2，不会被挤成「3+1」的残缺布局
+          h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8 } },
             h(Field, {
               value: overview?.notes ?? '—', label: t('notes'), sub: t('notesSub'),
               onClick: () => openPage('notes'),

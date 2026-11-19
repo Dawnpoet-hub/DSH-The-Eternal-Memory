@@ -318,8 +318,13 @@ async function buildPipeline() {
     mcpReady = (prof.dsh?.profile?.bundles ?? []).includes('@local/dsh-the-eternal-memory')
   } catch { /* ignore */ }
 
-  const backfillDone = Object.values(backfill.done ?? {}).filter((v) => v && v.facts).length
-  const backfillTotal = 9
+  // 分母来自 auto.js 写的 meta（当前还在磁盘上的历史会话数）；
+  // 没有 meta 时退回「历史累计」，且分母不再写死，避免出现 58/9 这种数字。
+  const backfillMeta = backfill.meta ?? null
+  const backfillDone = backfillMeta ? backfillMeta.done
+    : Object.values(backfill.done ?? {}).filter((v) => v && v.facts).length
+  const backfillTotal = backfillMeta ? backfillMeta.total
+    : Math.max(backfillDone, 1)
 
   const steps = [
     {
@@ -373,8 +378,10 @@ async function buildPipeline() {
     },
     {
       key: 'backfill', title: '历史回填', sub: '把以前的对话补进记忆',
-      state: backfillDone >= backfillTotal ? 'ok' : (backfillDone > 0 ? 'idle' : 'warn'),
-      detail: `已完成 ${backfillDone} / ${backfillTotal} 个历史会话`,
+      state: backfillTotal > 0 && backfillDone >= backfillTotal ? 'ok' : (backfillDone > 0 ? 'idle' : 'warn'),
+      detail: backfillDone >= backfillTotal
+        ? `已完成 ${backfillDone} / ${backfillTotal} 个历史会话`
+        : `已完成 ${backfillDone} / ${backfillTotal} 个历史会话，还剩 ${backfillTotal - backfillDone} 个`,
       fix: null,
       metric: `${backfillDone}/${backfillTotal}`,
     },
