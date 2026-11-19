@@ -33,6 +33,10 @@ const PRELUDE_CHARS = 200        // 停顿点摘要的字数上限
 // L1 写入闸门：写库前先问常驻服务「这条是不是已经有了」（判据见 tools/mem/gate.py）。
 // 设 MEM_AUTO_DEDUPE=0 可关掉，退化成只做字面包含去重。
 const DEDUPE_GATE = process.env.MEM_AUTO_DEDUPE !== '0'
+// 实验/调试开关：MEM_AUTO_INJECT=0 只关「自动召回+注入」，MCP 工具与写回照常；
+// MEM_AUTO_WRITE=0 只关「写回」，用来冻结记忆库（做 A/B 对照时防止库在实验中途变大）。
+const INJECT_ENABLED = process.env.MEM_AUTO_INJECT !== '0'
+const WRITE_ENABLED = process.env.MEM_AUTO_WRITE !== '0'
 const GATE_TIMEOUT_MS = Number(process.env.MEM_AUTO_GATE_TIMEOUT ?? 8000)
 const CHUNK_CHARS = 12_000       // 与 Hindsight 的 retain_chunk_size 一致
 const MAX_CHUNKS = 3
@@ -1308,6 +1312,7 @@ export function apply(ctx) {
 
       if (!prompt || prompt.length < MIN_PROMPT) return decision
       if (prompt.startsWith('/') || prompt.startsWith('[')) return decision
+      if (!INJECT_ENABLED) return decision   // 实验/调试：只关注入，其余照常
 
       const info = await projectInfo(agent)
       const contextText = await recall(prompt, info.project)
@@ -1334,6 +1339,7 @@ export function apply(ctx) {
   }, { prepend: true })
 
   ctx.on('agent/turn-stopping', ({ agent }) => {
+    if (!WRITE_ENABLED) return   // 实验/调试：冻结写回，记忆库保持不变
     if (pendingPageRebuild) {
       pendingPageRebuild = false
       const llm = ctx.get ? ctx.get('llm') : undefined

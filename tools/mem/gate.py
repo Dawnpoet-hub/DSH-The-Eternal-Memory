@@ -159,6 +159,82 @@ def check(items, threshold=COS_THRESHOLD):
     return out
 
 
+
+def check_global(items, threshold=COS_THRESHOLD, max_lines=20, ignore_category=False):
+    """全库查重：不限定目标笔记，用于**手动写入**（write_note）。
+
+    与 check() 的差别只有两点：
+      1. 比较范围是全库，而不是目标笔记内部；
+      2. 允许命中人工写入的条目（手动写入正是要防止与它们重复）；
+      3. ignore_category=True 时跳过类别同族校验——手动写入的正文没有可靠的
+         事实类别（type 是 note/decision 这类笔记类型），若照搬类别守卫会漏判。
+
+    返回结构与 check() 一致，额外带 target_note。
+    任何异常都退化成 new —— 查重坏掉不能阻断写入。
+    """
+    if not items:
+        return []
+    try:
+        import numpy as np
+        import embed as E
+    except Exception as e:                                   # pragma: no cover
+        return [{"i": i, "verdict": "new", "why": f"import-fail:{e}"} for i in range(len(items))]
+
+    out = [{"i": i, "verdict": "new"} for i in range(len(items))]
+    try:
+        db = core.connect()
+        try:
+            _refresh(db)
+        finally:
+            db.close()
+
+        blocks, meta = [], []
+        for key in list(_cache["by_note"].keys()):
+            m = _matrix(key)
+            if m is None:
+                continue
+            mat, rows = m
+            blocks.append(mat)
+            meta.extend((key, r) for r in rows)
+        if not blocks:
+            return out
+        allmat = np.vstack(blocks)
+
+        texts = [str(it.get("text") or "").strip()[:max_lines * 500] for it in items]
+        vecs, _prov = E.embed_texts(texts)
+        if not vecs or isinstance(vecs[0], dict):
+            for o in out:
+                o["why"] = "no-semantic-vector"
+            return out
+
+        for i, it in enumerate(items):
+            v = np.array(vecs[i], dtype="float32")
+            n = float(np.linalg.norm(v))
+            if n <= 0:
+                continue
+            v = v / n
+            sims = allmat @ v
+            j = int(sims.argmax())
+            score = float(sims[j])
+            out[i]["score"] = round(score, 4)
+            if score < threshold:
+                out[i]["why"] = "below-threshold"
+                continue
+            _key, (_line, text, cat, _conv, _vec) = meta[j]
+            a, b = audit._lits(it.get("text")), audit._lits(text)
+            if not (a == b or a <= b or b <= a):
+                out[i]["why"] = "literals-differ"
+                continue
+            if not ignore_category and \
+                    audit._family(it.get("category") or "") != audit._family(cat):
+                out[i]["why"] = "category-differ"
+                continue
+            out[i].update({"verdict": "dup", "target_note": _key,
+                           "target_line": _line, "target_text": (text or "")[:160], "why": "dup"})
+    except Exception:                                        # pragma: no cover
+        pass
+    return out
+
 def main():
     """调试入口：stdin 收 {"items":[...]}，stdout 回结果。"""
     for line in sys.stdin:

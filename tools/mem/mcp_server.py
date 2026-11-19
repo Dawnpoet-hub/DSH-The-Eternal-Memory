@@ -7,6 +7,7 @@
   args:    ["<workspace>/tools/mem/mcp_server.py"]
 """
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -59,6 +60,7 @@ TOOLS = [
                 "tags": {"type": "array", "items": {"type": "string"}},
                 "content": {"type": "string"},
                 "append": {"type": "boolean"},
+                "force": {"type": "boolean", "description": "跳过覆盖保护与查重，强制写入（默认 false）"},
             },
             "required": ["title", "content"],
         },
@@ -134,7 +136,7 @@ def read_page(title_or_path):
     return f"没有找到《{key}》。现有页面：{names}"
 
 
-def write_note(title, content, type_="note", tags=None, append=False, project="main"):
+def write_note(title, content, type_="note", tags=None, append=False, project="main", force=False):
     roots = {n: r for n, r in _core.load_projects()}
     # 写入前先按 schema 校验类别，不合格直接拒绝（而不是等他日体检才发现）
     _schemas = _core.load_schemas()
@@ -148,6 +150,33 @@ def write_note(title, content, type_="note", tags=None, append=False, project="m
     d = roots.get(project or "main") or (WS / "memory")
     d.mkdir(parents=True, exist_ok=True)
     path = d / f"{_slug(title)}.md"
+    rel = str(path.relative_to(WS))
+
+    # ① 覆盖保护：同名笔记已存在时默认不覆盖（整篇替换是静默丢数据）
+    if not append and path.exists() and not force:
+        return (f"⚠️ 未写入：已有同名笔记 {rel}。\n"
+                f"  想补内容 → 带 append=true；确认要整篇覆盖 → 带 force=true。")
+
+    # ② 全库查重：手动写入以前完全不过闸门，重复条目会挤占检索配额、污染主题页
+    if not force:
+        _lines = [l.strip() for l in content.splitlines() if l.strip()][:20]
+        try:
+            import gate as G
+            # 阈值比自动写回（0.92）低：手动写入只是「警告 + 让调用者决定」，
+            # 误报的代价是一次 force=true，漏报的代价是一条永久重复。
+            _verdicts = G.check_global([{"text": l} for l in _lines],
+                                       threshold=float(os.environ.get("MEM_WRITE_DUP_COS", "0.85")),
+                                       ignore_category=True)
+        except Exception:
+            _verdicts = []
+        _dups = [v for v in _verdicts if v.get("verdict") == "dup"]
+        if _dups:
+            _d = _dups[0]
+            return (f"⚠️ 未写入：内容与已有条目高度相似（相似度 {_d.get('score')}）。\n"
+                    f"  已有：{_d.get('target_note')} 第 {_d.get('target_line')} 行：{_d.get('target_text')}\n"
+                    f"  共 {len(_dups)}/{len(_lines)} 行命中重复。\n"
+                    f"  确认仍要写 → 带 force=true；只想补充 → 直接编辑原条目更合适。")
+
     if append and path.exists():
         old = path.read_text(encoding="utf-8").rstrip()
         path.write_text(old + "\n" + content.strip() + "\n", encoding="utf-8")
@@ -158,7 +187,9 @@ def write_note(title, content, type_="note", tags=None, append=False, project="m
         fm.append("---")
         path.write_text("\n".join(fm) + "\n" + content.strip() + "\n", encoding="utf-8")
     build(verbose=False, rebuild=False)
-    return str(path.relative_to(WS))
+    if force and not append and path.exists():
+        return f"✅ 已覆盖写入 {rel}"
+    return f"✅ 已写入 {rel}"
 
 
 def read_note(title):
@@ -183,7 +214,8 @@ def call_tool(name, args):
         return S.related(args["title"], int(args.get("depth") or 1))
     if name == "mem_write_note":
         return write_note(args["title"], args["content"], args.get("type", "note"),
-                          args.get("tags"), bool(args.get("append")), args.get("project", "main"))
+                          args.get("tags"), bool(args.get("append")), args.get("project", "main"),
+                          bool(args.get("force")))
     if name == "mem_read_page":
         return read_page(args["title"])
     if name == "mem_read_note":

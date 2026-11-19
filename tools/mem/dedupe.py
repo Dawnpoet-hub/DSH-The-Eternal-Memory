@@ -125,6 +125,9 @@ def render_markdown(r):
     L.append(f"生成时间：{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(r['ts']))}")
     L.append("")
     L.append("> 本报告不修改任何文件。所有数字来自 `audit` 的同一套判据。")
+    L.append(">")
+    L.append("> **「第 N 条」是该笔记内第 N 条观察的序号，不是文件行号**（文件前面还有 frontmatter 和标题）。")
+    L.append("> 手动清理时请按文字匹配，不要按行号删——曾因把序号当行号删错过 6 条观察。")
     L.append("")
     L.append("## 总览")
     L.append("")
@@ -149,9 +152,9 @@ def render_markdown(r):
         for i, it in enumerate(items, 1):
             L.append(f"### {i}. `{it['path']}` — 合并 {it['removed']} 条")
             L.append("")
-            L.append(f"- **保留** L{it['kept']['line']} 〔{it['kept']['category']}〕{it['kept']['text']}")
+            L.append(f"- **保留** 第 {it['kept']['line']} 条 〔{it['kept']['category']}〕{it['kept']['text']}")
             for d in it["dropped"]:
-                L.append(f"- ~~合并~~ L{d['line']} 〔{d['category']}〕{d['text']}")
+                L.append(f"- ~~合并~~ 第 {d['line']} 条 〔{d['category']}〕{d['text']}")
             if review_mode:
                 L.append(f"- ⚠️ **会丢字面值**：{', '.join('`%s`' % x for x in it['lost_literals'])}")
             else:
