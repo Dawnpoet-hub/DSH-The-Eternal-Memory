@@ -339,9 +339,10 @@ async function buildPipeline() {
     {
       key: 'mcp', title: '工具通道', sub: 'AI 直接调取记忆的接口',
       state: mcpReady ? 'ok' : 'warn',
-      detail: mcpReady ? '8 个工具已注册，AI 可主动搜索与写入' : '插件未出现在 profile 的 bundle 列表里',
+      // 不写死工具数：MCP 增删工具时这里会变成假数字（曾写死 8，实际 9）
+      detail: mcpReady ? '已连接，AI 可主动搜索与写入' : '插件未出现在 profile 的 bundle 列表里',
       fix: mcpReady ? null : '检查 profile 的 package.json 里是否有 @local/dsh-the-eternal-memory',
-      metric: mcpReady ? '8 个工具' : '未注册',
+      metric: mcpReady ? '已连接' : '未注册',
     },
     {
       key: 'recall', title: '自动召回', sub: '每次提问前，先翻一遍记忆',
@@ -376,13 +377,6 @@ async function buildPipeline() {
       detail: lastPage ? `最近重建 ${ago(lastPage.t)}：${lastPage.label}（${lastPage.facts} 条事实）` : '每 10 轮重建一次，还没到',
       fix: null,
       metric: lastPage ? lastPage.label : '未生成',
-    },
-    {
-      key: 'reflect', title: '深推理', sub: '根据现象回溯是哪条决定造成的',
-      state: mcpReady ? 'ok' : 'warn',
-      detail: '可用：mem_reflect（只在需要时调用，不额外花钱）',
-      fix: null,
-      metric: mcpReady ? '可用' : '不可用',
     },
     {
       key: 'backfill', title: '历史回填', sub: '把以前的对话补进记忆',

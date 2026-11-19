@@ -361,7 +361,7 @@ const EXTRACT_PROMPT = `你在把一段开发者对话（JSONL，每行一个 {r
 
 entities 说明：填**可被搜索的具体名词**——文件路径、色值、接口/函数名、组件名、产品名、命令名。
 - 每条事实 1–4 个，超过 4 个说明这条事实不聚焦，应拆开。
-- 用原文里的写法（例如 "#3A7A3A"、"tools/mem/search.py"、"mem_reflect"），不要自己起名。
+- 用原文里的写法（例如 "#3A7A3A"、"tools/mem/search.py"、"mem_search"），不要自己起名。
 - 没有具体名词就填空数组 []。
 
 because 说明：只在「原因/约束」类事实里填，指向它解释的那条决定；没有就省略。
@@ -729,98 +729,6 @@ async function rebuildPages(ctx, llm, root = MEM, project = null) {
     }
   }
   return rebuilt
-}
-
-function listPageBodies(root = MEM) {
-  try {
-    if (!fs.existsSync(path.join(root, 'pages'))) return []
-    return fs.readdirSync(path.join(root, 'pages'))
-      .filter((f) => f.endsWith('.md'))
-      .map((f) => ({ name: f.replace(/\.md$/, ''), body: fs.readFileSync(path.join(root, 'pages', f), 'utf8') }))
-  } catch {
-    return []
-  }
-}
-
-async function reflect(ctx, symptom, project, root = MEM) {
-  const raw = await ask({ op: 'search', q: symptom, n: 15, project })
-  let hits = []
-  try { hits = JSON.parse(raw ?? '{}').hits ?? [] } catch { /* ignore */ }
-
-  const parts = []
-  if (hits.length) {
-    parts.push('【检索到的事实】')
-    for (const h of hits.slice(0, 12)) {
-      if (h.kind === 'obs') parts.push(`- [${h.cat}] ${h.text}（来源: ${h.path}:${h.line}）`)
-      else parts.push(`- 笔记《${h.title}》（${h.path}）`)
-    }
-  }
-  // 命中最高的几篇笔记，整篇带上——字面值往往不在 top-k 片段里
-  const seenPaths = new Set()
-  for (const h of hits.slice(0, 10)) {
-    if (seenPaths.size >= 3) break
-    if (!h.path || seenPaths.has(h.path)) continue
-    seenPaths.add(h.path)
-    try {
-      const body = fs.readFileSync(path.join(WS, h.path), 'utf8')
-      parts.push(`\n【笔记全文：《${h.title}》 ${h.path}】\n${body.slice(0, 1500)}`)
-    } catch { /* 文件不在了就跳过 */ }
-  }
-
-  const pages = listPageBodies(root)
-  for (const pg of pages.slice(0, 4)) {
-    parts.push(`\n【页面：${pg.name}】\n${pg.body.slice(0, 1800)}`)
-  }
-  const evidence = parts.join('\n')
-  if (evidence.length < 40) return '记忆里没有能解释这个问题的记录。'
-
-  const llm = ctx.get ? ctx.get('llm') : undefined
-  if (!llm?.stream) return '（记忆插件未能连接模型，无法深推理）'
-
-  const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('reflect timeout')), DISTILL_TIMEOUT))
-  const res = await Promise.race([
-    callModelAuto(ctx, llm, REFLECT_PROMPT, `现象：${symptom}\n\n${evidence}`),
-    timeout,
-  ])
-  return String(res.text).trim() || '（模型没有返回内容）'
-}
-
-function registerTools(ctx) {
-  ctx.inject(['tools'], (toolCtx) => {
-    try {
-      toolCtx.tools.register({
-        name: 'mem_reflect',
-        description: 'Deep-reason over the local long-term memory (memory/ facts and pages) to explain WHY something behaves the way it does. Give it a symptom or question; it returns the past decision whose rationale explains the root cause, with the exact literal values and a source citation, or says plainly that memory holds nothing that explains it. Use it when debugging behaviour, or when the user asks why something is the way it is.',
-        parameters: {
-          type: 'object',
-          properties: {
-            symptom: { type: 'string', description: 'The symptom or question to explain, in the user\'s words.' },
-          },
-          required: ['symptom'],
-        },
-        output: {
-          schema: { type: 'string' },
-          render: (_args, value) => [{ type: 'text', text: String(value) }],
-        },
-        async execute(args, exec) {
-          const q = String(args?.symptom ?? '').trim()
-          if (!q) return '请给一个现象或问题。'
-          try {
-            const t0 = Date.now()
-            const info = exec?.agent ? await projectInfo(exec.agent) : { project: undefined, root: MEM }
-            const text = await reflect(ctx, q, info.project, info.root)
-            note({ ev: 'reflect', ms: Date.now() - t0, q: q.slice(0, 60), chars: text.length })
-            return text
-          } catch (e) {
-            note({ ev: 'reflect_error', err: String(e) })
-            return `深推理失败：${e.message}`
-          }
-        },
-      })
-    } catch (e) {
-      note({ ev: 'tool_register_fail', err: String(e) })
-    }
-  })
 }
 
 async function distillJsonl(ctx, llm, jsonl, prelude = '') {
@@ -1259,7 +1167,6 @@ function compose(contextText, first) {
 
 export function apply(ctx) {
   note({ ev: 'plugin_loaded' })
-  registerTools(ctx)
 
   ctx.on('agent/session-start', (ev) => {
       // 新会话开始时顺手同步一次工作区（60 秒节流），避免新工作区的记忆落到 main
