@@ -37,9 +37,24 @@
 
 > 安装源可以选「中国大陆镜像源」，网络不好时更稳。
 
-> **如果装完侧边栏没有出现「长期记忆」**：说明自动安装没能正确登记包名（本插件包名带 `@local/` 作用域，部分安装器会重写）。这时改用手动方式（方式二），两分钟能装好。
+> **如果装完侧边栏没有出现「长期记忆」**：说明自动安装没能正确登记包名（本插件包名带 `@local/` 作用域，部分安装器会重写）。这时改用下面的**一条命令**（方式二）或手动登记（方式三）。
 
-### 方式二：手动登记（改代码 / 离线时用）
+### 方式二：一条命令（推荐给不想改配置的人）
+
+```bash
+git clone https://github.com/Dawnpoet-hub/DSH-The-Eternal-Memory.git ~/dsh-plugins/DSH-The-Eternal-Memory
+cd ~/dsh-plugins/DSH-The-Eternal-Memory
+node install.mjs
+```
+
+它会依次做六件事：检查工作区 → 找 Python（**优先用 DSH 自带的**，不用自己装）→ 建虚拟环境 →
+装依赖（约 80MB）→ 初始化索引 → 把插件登记进 profile 并建好软链。
+
+跑完**重启 DSH**，左侧栏就会出现「长期记忆」。剩下的只是面板里点「下载向量模型」（约 90MB）再重启一次。
+
+> 需要指定别的 profile 或工作区时：`node install.mjs --profile desktop --workspace /路径`。
+
+### 方式三：手动登记（改代码 / 离线时用）
 
 
 ### 1. 克隆到一个固定位置
@@ -90,11 +105,11 @@ ln -sfn ~/dsh-plugins/DSH-The-Eternal-Memory node_modules/@local/dsh-the-eternal
 ### 验证安装是否成功
 
 ```bash
-# 应能打印 3.11.x
+# 应能打印插件版本号（如 3.16.4）
 node -e "console.log(require('$HOME/.dsh/profiles/desktop/node_modules/@local/dsh-the-eternal-memory/package.json').version)"
 ```
 
-或者直接打开面板：能看到「运行状态」九步和「记忆概览」，说明插件已加载。
+或者直接打开面板：能看到「运行状态」7 个环节和「记忆概览」，说明插件已加载。
 
 ---
 

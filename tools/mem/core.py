@@ -324,6 +324,32 @@ def _pack(vec):
     return struct.pack(f"<{len(items)}Hf", *[x for k, v in items for x in (hash(k) & 0xFFFF, v)])
 
 
+SCHEMA = """
+CREATE TABLE notes(id INTEGER PRIMARY KEY, project TEXT, path TEXT UNIQUE,
+                   title TEXT, type TEXT, permalink TEXT, tags TEXT,
+                   mtime REAL, created REAL, hash TEXT, body TEXT);
+CREATE TABLE obs(id INTEGER PRIMARY KEY, note_id INT, category TEXT, text TEXT,
+                 tags TEXT, context TEXT, line INT, section TEXT,
+                 page TEXT, conv TEXT, ents TEXT, because TEXT);
+CREATE TABLE rel(id INTEGER PRIMARY KEY, note_id INT, rtype TEXT, target TEXT);
+CREATE TABLE vec(id INTEGER PRIMARY KEY, note_id INT, dim INT, data BLOB);
+CREATE TABLE obs_vec(id INTEGER PRIMARY KEY, obs_id INT, note_id INT, data BLOB);
+CREATE TABLE meta(k TEXT PRIMARY KEY, v TEXT);
+CREATE TABLE entities(id INTEGER PRIMARY KEY, norm TEXT UNIQUE, name TEXT, kind TEXT,
+                      first_seen REAL, seen INT DEFAULT 1);
+CREATE TABLE fact_entity(fact_id INT, entity_id INT, PRIMARY KEY(fact_id, entity_id));
+CREATE TABLE edges(id INTEGER PRIMARY KEY, a INT, b INT, etype TEXT, weight REAL, project TEXT DEFAULT 'main',
+                   computed_at REAL, UNIQUE(a,b,etype));
+CREATE INDEX idx_edges_a ON edges(a);
+CREATE INDEX idx_edges_project ON edges(project);
+CREATE INDEX idx_edges_b ON edges(b);
+CREATE INDEX idx_fact_entity_e ON fact_entity(entity_id);
+CREATE VIRTUAL TABLE notes_fts USING fts5(title, body, content='notes',
+                 content_rowid='id', tokenize='trigram');
+CREATE VIRTUAL TABLE obs_fts USING fts5(text, category, tags, context,
+                 content='obs', content_rowid='id', tokenize='trigram');
+"""
+
 def build(verbose=True, rebuild=True, edges_enabled=True):
     """索引或增量更新。rebuild=False 时按 hash 跳过未变文件。
 
